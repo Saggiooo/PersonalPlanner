@@ -700,6 +700,7 @@ function App() {
     try {
       await updateTask(input);
       await refreshWorkspace();
+      setSelectedTaskId(null);
     } catch (updateError) {
       setError("Non sono riuscito a salvare l'evento.");
       console.error(updateError);
@@ -1144,11 +1145,9 @@ function App() {
                       tasks={selectedProjectTasks}
                       selectedTaskId={selectedTaskId}
                       projectNamesById={projectNamesById}
-                      canManageColumns={canManageColumns}
                       canCreateTask={canCreateTask}
                       onSelectTask={setSelectedTaskId}
                       onMoveTask={handleMoveTask}
-                      onDeleteColumn={(columnId) => void handleDeleteColumn(columnId)}
                       onCreateTask={openTaskModal}
                       onAdvanceTask={(taskId) => void handleAdvanceTask(taskId)}
                       onOpenArchive={openArchiveModal}

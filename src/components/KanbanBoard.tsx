@@ -21,16 +21,18 @@ import { ColumnIcon } from "../lib/columnIcons";
 import { getPriorityMeta } from "../lib/priorities";
 import type { BoardColumn, Task } from "../lib/types";
 
+function stripHtml(html: string) {
+  return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+}
+
 interface KanbanBoardProps {
   columns: BoardColumn[];
   tasks: Task[];
   selectedTaskId: string | null;
   projectNamesById: Map<string, string>;
-  canManageColumns: boolean;
   canCreateTask: boolean;
   onSelectTask: (taskId: string) => void;
   onMoveTask: (taskId: string, targetColumnId: string, targetIndex: number) => void;
-  onDeleteColumn: (columnId: string) => void;
   onCreateTask: (columnId: string) => void;
   onAdvanceTask: (taskId: string) => void;
   onOpenArchive: () => void;
@@ -41,11 +43,9 @@ interface BoardColumnCardProps {
   tasks: Task[];
   selectedTaskId: string | null;
   projectNamesById: Map<string, string>;
-  canManageColumns: boolean;
   canCreateTask: boolean;
   onSelectTask: (taskId: string) => void;
   shouldSuppressClick: () => boolean;
-  onDeleteColumn: (columnId: string) => void;
   onCreateTask: (columnId: string) => void;
   onAdvanceTask: (taskId: string) => void;
   onOpenArchive: () => void;
@@ -80,6 +80,7 @@ function SortableTaskCard({
   onAdvanceTask: (taskId: string) => void;
 }) {
   const priority = getPriorityMeta(task.effort);
+  const previewNotes = stripHtml(task.notes);
 
   const {
     attributes,
@@ -129,7 +130,7 @@ function SortableTaskCard({
       {...listeners}
     >
       <strong>{task.title}</strong>
-      <p>{task.notes || "Nessuna nota aggiuntiva."}</p>
+      <p>{previewNotes || "Nessuna nota aggiuntiva."}</p>
       <div className="task-card__meta">
         <span className={`task-pill task-pill--priority task-pill--${priority.tone}`}>
           <span className="task-pill__dot" />
@@ -159,11 +160,9 @@ function BoardColumnCard({
   tasks,
   selectedTaskId,
   projectNamesById,
-  canManageColumns,
   canCreateTask,
   onSelectTask,
   shouldSuppressClick,
-  onDeleteColumn,
   onCreateTask,
   onAdvanceTask,
   onOpenArchive,
@@ -192,17 +191,17 @@ function BoardColumnCard({
           </span>
           <span className="board-column__count">{tasks.length}</span>
         </div>
-        {canManageColumns && !isArchivedColumn ? (
+        {canCreateTask && !isArchivedColumn ? (
           <button
             type="button"
             className="board-column__delete"
             onClick={(event) => {
               event.stopPropagation();
-              onDeleteColumn(column.id);
+              onCreateTask(column.id);
             }}
-            aria-label={`Rimuovi fase ${column.name}`}
+            aria-label={`Aggiungi evento nella fase ${column.name}`}
           >
-            x
+            +
           </button>
         ) : null}
       </header>
@@ -255,11 +254,9 @@ export function KanbanBoard({
   tasks,
   selectedTaskId,
   projectNamesById,
-  canManageColumns,
   canCreateTask,
   onSelectTask,
   onMoveTask,
-  onDeleteColumn,
   onCreateTask,
   onAdvanceTask,
   onOpenArchive,
@@ -352,11 +349,9 @@ export function KanbanBoard({
               tasks={tasks.filter((task) => task.columnId === column.id)}
               selectedTaskId={selectedTaskId}
               projectNamesById={projectNamesById}
-              canManageColumns={canManageColumns}
               canCreateTask={canCreateTask}
               onSelectTask={onSelectTask}
               shouldSuppressClick={shouldSuppressClick}
-              onDeleteColumn={onDeleteColumn}
               onCreateTask={onCreateTask}
               onAdvanceTask={onAdvanceTask}
               onOpenArchive={onOpenArchive}

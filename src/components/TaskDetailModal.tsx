@@ -1,6 +1,10 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { PRIORITY_OPTIONS, getPriorityMeta } from "../lib/priorities";
 import type { BoardColumn, ChecklistItem, Project, Task } from "../lib/types";
+
+function stripHtml(html: string) {
+  return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+}
 
 interface TaskDetailModalProps {
   task: Task | null;
@@ -42,6 +46,7 @@ export function TaskDetailModal({
   onAddChecklistItem,
   onToggleChecklistItem,
 }: TaskDetailModalProps) {
+  const editorRef = useRef<HTMLDivElement | null>(null);
   const [draft, setDraft] = useState({
     title: "",
     notes: "",
@@ -65,6 +70,16 @@ export function TaskDetailModal({
     });
     setChecklistLabel("");
   }, [task]);
+
+  useEffect(() => {
+    if (!editorRef.current) {
+      return;
+    }
+
+    if (editorRef.current.innerHTML !== draft.notes) {
+      editorRef.current.innerHTML = draft.notes;
+    }
+  }, [draft.notes]);
 
   if (!task || !project) {
     return null;
@@ -106,20 +121,31 @@ export function TaskDetailModal({
     setChecklistLabel("");
   }
 
+  function syncNotesFromEditor() {
+    const value = editorRef.current?.innerHTML ?? "";
+
+    setDraft((current) => ({
+      ...current,
+      notes: value,
+    }));
+  }
+
+  function applyEditorCommand(command: string, value?: string) {
+    editorRef.current?.focus();
+    document.execCommand(command, false, value);
+    syncNotesFromEditor();
+  }
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
         className="modal-card modal-card--detail"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="task-detail-title"
+        aria-label="Dettaglio evento"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="modal-card__header modal-card__header--detail">
-          <div>
-            <p className="eyebrow">Evento</p>
-            <h3 id="task-detail-title">{draft.title || "Nuovo titolo"}</h3>
-          </div>
           <button type="button" className="modal-close" onClick={onClose}>
             x
           </button>
@@ -233,18 +259,39 @@ export function TaskDetailModal({
 
           <label className="task-detail__description">
             <span>Descrizione</span>
-            <textarea
-              value={draft.notes}
-              rows={7}
-              onChange={(event) => {
-                const value = event.currentTarget.value;
-
-                setDraft((current) => ({
-                  ...current,
-                  notes: value,
-                }));
-              }}
-            />
+            <div className="task-editor">
+              <div className="task-editor__toolbar" role="toolbar" aria-label="Formato descrizione">
+                <button type="button" onClick={() => applyEditorCommand("formatBlock", "<h1>")}>
+                  H1
+                </button>
+                <button type="button" onClick={() => applyEditorCommand("formatBlock", "<h2>")}>
+                  H2
+                </button>
+                <button type="button" onClick={() => applyEditorCommand("formatBlock", "<h3>")}>
+                  H3
+                </button>
+                <button type="button" onClick={() => applyEditorCommand("bold")}>
+                  B
+                </button>
+                <button type="button" onClick={() => applyEditorCommand("underline")}>
+                  U
+                </button>
+                <button type="button" onClick={() => applyEditorCommand("insertUnorderedList")}>
+                  • Elenco
+                </button>
+              </div>
+              <div
+                ref={editorRef}
+                className="task-editor__surface"
+                contentEditable
+                suppressContentEditableWarning
+                onInput={syncNotesFromEditor}
+                data-placeholder="Scrivi una descrizione piu ricca, con titoli, enfasi ed elenchi."
+              />
+            </div>
+            <small className="task-detail__description-hint">
+              Anteprima card: {stripHtml(draft.notes) || "nessun testo ancora"}
+            </small>
           </label>
 
           <section className="task-detail__checklist">
@@ -291,7 +338,7 @@ export function TaskDetailModal({
 
           <div className="modal-actions">
             <button type="button" className="modal-button modal-button--ghost" onClick={onClose}>
-              Chiudi
+              Annulla
             </button>
             <button type="submit" className="modal-button">
               Salva
