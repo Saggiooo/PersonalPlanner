@@ -1,42 +1,176 @@
 import { type FormEvent, useEffect, useState } from "react";
 import "./App.css";
 import { KanbanBoard } from "./components/KanbanBoard";
+import { MeasurementsView } from "./components/MeasurementsView";
+import { ReadingView } from "./components/ReadingView";
+import { SubscriptionsView } from "./components/SubscriptionsView";
 import { TaskDetailModal } from "./components/TaskDetailModal";
 import { TimelineView } from "./components/TimelineView";
+import { TrackerView } from "./components/TrackerView";
 import { COLUMN_ICON_OPTIONS, ColumnIcon } from "./lib/columnIcons";
 import {
   ARCHIVED_COLUMN_NAME,
   advanceTask,
+  createTrackerWorkoutActivity,
   createChecklistItem,
   createColumn,
   createProject,
   createTask,
+  deleteReadingItem,
+  deleteSubscription,
+  deleteTrackerWorkoutActivity,
+  deleteChecklistItem,
   deleteColumn,
+  deleteMeasurementEntry,
   deleteProject,
+  loadMeasurementEntries,
+  loadReadingItems,
+  loadSubscriptions,
+  loadTrackerWorkoutActivities,
+  loadTrackerHabitPreferences,
   loadWorkspace,
+  loadTrackerEntries,
   moveTask,
   reorderColumns,
   toggleChecklistItem,
+  upsertMeasurementEntry,
+  upsertReadingItem,
+  upsertSubscription,
+  upsertTrackerEntry,
   updateColumn,
   updateProject,
-  updateProjectIcon,
+  updateProjectAccent,
+  updateTrackerHabitPreference,
+  updateTaskPriority,
   updateTask,
 } from "./lib/database";
 import { PRIORITY_OPTIONS } from "./lib/priorities";
-import type { BoardColumn, ViewMode, WorkspaceSnapshot } from "./lib/types";
+import type {
+  BoardColumn,
+  MeasurementEntry,
+  ReadingItem,
+  SubscriptionItem,
+  TrackerHabitKey,
+  TrackerHabitPreference,
+  TrackerEntry,
+  TrackerSectionKey,
+  UpsertReadingInput,
+  UpsertSubscriptionInput,
+  UpsertMeasurementEntryInput,
+  UpsertTrackerEntryInput,
+  ViewMode,
+  WorkspaceSnapshot,
+} from "./lib/types";
 
 const ALL_WORKSPACES_ID = "__all__";
 const AGGREGATE_COLUMN_PREFIX = "all:";
 const DEFAULT_NEW_COLUMN_COLOR = "#5450ff";
-const WORKSPACE_ICON_OPTIONS = ["💼", "📚", "🏠", "🧠", "💻", "🗂️", "🎯", "✍️", "🧾", "🧪"];
+const TRACKER_MIN_YEAR = 2026;
+const WORKSPACE_COLOR_OPTIONS = [
+  "#5e6bff",
+  "#2f84f6",
+  "#00a884",
+  "#42a55b",
+  "#d7923e",
+  "#cc5c3a",
+  "#be4f5e",
+  "#8d5dd0",
+  "#596477",
+  "#7f6a56",
+];
 const GOOGLE_CALENDAR_CLIENT_ID =
   "109644726881-j16a7f4ulc6vgv22b3s1djvrbkpt0pj3.apps.googleusercontent.com";
 const AGGREGATE_COLUMN_ORDER_STORAGE_KEY = "organizer.aggregate-column-order";
+const TRACKER_YEARS_STORAGE_KEY = "organizer.tracker-years";
+const TRACKER_SECTION_VISIBILITY_STORAGE_KEY = "organizer.tracker-section-visibility";
+const LEGACY_SUBSCRIPTIONS_STORAGE_KEY = "organizer.subscriptions";
+const DEFAULT_TRACKER_SECTION_VISIBILITY: Record<TrackerSectionKey, boolean> = {
+  weight: true,
+  sport: true,
+  habits: true,
+  nutrition: true,
+  notes: true,
+};
+const TRACKER_SECTION_LABELS: Record<TrackerSectionKey, string> = {
+  weight: "Peso",
+  sport: "Sport",
+  habits: "Abitudini",
+  nutrition: "Alimentazione",
+  notes: "Note giornata",
+};
+const APP_VERSION = "0.1.0";
 
 interface ColumnDraft {
   name: string;
   color: string;
   icon: string;
+}
+
+function renderHeaderMenuIcon(sectionId: string) {
+  switch (sectionId) {
+    case "home":
+      return (
+        <svg viewBox="0 0 24 24" className="top-header__nav-icon-svg" aria-hidden="true">
+          <path d="M4 10.5 12 4l8 6.5V20h-5.2v-4.8H9.2V20H4Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "calendar":
+      return (
+        <svg viewBox="0 0 24 24" className="top-header__nav-icon-svg" aria-hidden="true">
+          <rect x="4" y="5" width="16" height="15" rx="2.2" fill="none" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M8 3.8v3M16 3.8v3M4 9.5h16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      );
+    case "tracker":
+      return (
+        <svg viewBox="0 0 24 24" className="top-header__nav-icon-svg" aria-hidden="true">
+          <path d="M3.8 14.2h3.6l2.2-4.6 3.1 7 2.4-5.2h5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "measurements":
+      return (
+        <svg viewBox="0 0 24 24" className="top-header__nav-icon-svg" aria-hidden="true">
+          <path d="M5 7.2 8.2 4l11.8 11.8-3.2 3.2L5 7.2Z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+          <path d="m9.6 5.4 1.5 1.5m1.8.2 1.5 1.5m1.8.2 1.5 1.5m-7.4 1.4 1.5 1.5m1.8.2 1.5 1.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
+      );
+    case "workout":
+      return (
+        <svg viewBox="0 0 24 24" className="top-header__nav-icon-svg" aria-hidden="true">
+          <path d="M3.5 10.2h2.3v3.6H3.5zM18.2 10.2h2.3v3.6h-2.3zM7.1 9h1.9v6H7.1zM15 9h1.9v6H15zM9.8 10.9h4.4v2.2H9.8z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+        </svg>
+      );
+    case "reading":
+      return (
+        <svg viewBox="0 0 24 24" className="top-header__nav-icon-svg" aria-hidden="true">
+          <path d="M4.5 5.2h6.3a3 3 0 0 1 3 3v10.6H7.6a3.1 3.1 0 0 0-3.1 0Zm15 0h-6.3a3 3 0 0 0-3 3v10.6h6.2a3.1 3.1 0 0 1 3.1 0Z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "goals":
+      return (
+        <svg viewBox="0 0 24 24" className="top-header__nav-icon-svg" aria-hidden="true">
+          <circle cx="12" cy="12" r="7.2" fill="none" stroke="currentColor" strokeWidth="1.7" />
+          <circle cx="12" cy="12" r="3.4" fill="none" stroke="currentColor" strokeWidth="1.7" />
+          <circle cx="12" cy="12" r="1.2" fill="currentColor" />
+        </svg>
+      );
+    case "subscriptions":
+      return (
+        <svg viewBox="0 0 24 24" className="top-header__nav-icon-svg" aria-hidden="true">
+          <rect x="3.8" y="6.2" width="16.4" height="11.6" rx="2.3" fill="none" stroke="currentColor" strokeWidth="1.7" />
+          <path d="M3.8 10h16.4M8.2 14.1h3.5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+        </svg>
+      );
+    default:
+      return (
+        <svg viewBox="0 0 24 24" className="top-header__nav-icon-svg" aria-hidden="true">
+          <rect x="4" y="4.5" width="6.3" height="6.3" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.7" />
+          <rect x="13.7" y="4.5" width="6.3" height="6.3" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.7" />
+          <rect x="4" y="13.2" width="6.3" height="6.3" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.7" />
+          <rect x="13.7" y="13.2" width="6.3" height="6.3" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.7" />
+        </svg>
+      );
+  }
 }
 
 function moveTaskLocally(
@@ -132,12 +266,171 @@ function App() {
   const [isKanbanPhasesModalOpen, setIsKanbanPhasesModalOpen] = useState(false);
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
   const [activeSettingsSection, setActiveSettingsSection] = useState("google-calendar");
-  const [iconPickerProjectId, setIconPickerProjectId] = useState<string | null>(null);
+  const [colorPickerProjectId, setColorPickerProjectId] = useState<string | null>(null);
   const [aggregateColumnOrder, setAggregateColumnOrder] = useState<string[]>([]);
+  const [trackerYears, setTrackerYears] = useState<number[]>([TRACKER_MIN_YEAR]);
+  const [trackerYear, setTrackerYear] = useState(TRACKER_MIN_YEAR);
+  const [trackerMonth, setTrackerMonth] = useState(1);
+  const [trackerEntries, setTrackerEntries] = useState<TrackerEntry[]>([]);
+  const [measurementEntries, setMeasurementEntries] = useState<MeasurementEntry[]>([]);
+  const [readingItems, setReadingItems] = useState<ReadingItem[]>([]);
+  const [subscriptions, setSubscriptions] = useState<SubscriptionItem[]>([]);
+  const [trackerWorkoutActivities, setTrackerWorkoutActivities] = useState<string[]>([]);
+  const [trackerHabitPreferences, setTrackerHabitPreferences] = useState<TrackerHabitPreference[]>([]);
+  const [trackerSectionVisibility, setTrackerSectionVisibility] = useState<Record<TrackerSectionKey, boolean>>(
+    DEFAULT_TRACKER_SECTION_VISIBILITY,
+  );
+  const [isTrackerActivitiesModalOpen, setIsTrackerActivitiesModalOpen] = useState(false);
+  const [isTrackerHabitsModalOpen, setIsTrackerHabitsModalOpen] = useState(false);
+  const [isTrackerSectionsModalOpen, setIsTrackerSectionsModalOpen] = useState(false);
+  const [trackerActivityName, setTrackerActivityName] = useState("");
 
   useEffect(() => {
     void refreshWorkspace();
+    void refreshTrackerWorkoutActivities();
+    void refreshTrackerHabitPreferences();
+    void refreshMeasurementEntries();
+    void refreshReadingItems();
+    void refreshSubscriptions();
   }, []);
+
+  useEffect(() => {
+    async function migrateLegacySubscriptions() {
+      const stored = window.localStorage.getItem(LEGACY_SUBSCRIPTIONS_STORAGE_KEY);
+
+      if (!stored || subscriptions.length) {
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(stored);
+
+        if (!Array.isArray(parsed)) {
+          return;
+        }
+
+        for (const rawItem of parsed) {
+          if (!rawItem || typeof rawItem !== "object") {
+            continue;
+          }
+
+          const item = rawItem as Partial<SubscriptionItem> & { price?: number };
+          const totalPrice =
+            typeof item.totalPrice === "number"
+              ? item.totalPrice
+              : typeof item.price === "number"
+                ? item.price
+                : 0;
+          const mySharePrice =
+            typeof item.mySharePrice === "number" ? item.mySharePrice : totalPrice;
+
+          if (!item.name || !Number.isFinite(totalPrice)) {
+            continue;
+          }
+
+          await upsertSubscription({
+            id: item.id,
+            status: item.status ?? "attivo",
+            name: item.name,
+            totalPrice,
+            mySharePrice,
+            frequency: item.frequency ?? "mensile",
+            platform: item.platform ?? "",
+            billingSource: item.billingSource ?? "",
+            renewalDate: item.renewalDate ?? new Date().toISOString().slice(0, 10),
+            category: item.category ?? "personale",
+            sharing: item.sharing ?? "individuale",
+            sharedPeople: Array.isArray(item.sharedPeople)
+              ? item.sharedPeople.filter((person): person is string => typeof person === "string")
+              : [],
+          });
+        }
+
+        window.localStorage.removeItem(LEGACY_SUBSCRIPTIONS_STORAGE_KEY);
+        await refreshSubscriptions();
+      } catch (migrationError) {
+        console.error(migrationError);
+      }
+    }
+
+    void migrateLegacySubscriptions();
+  }, [subscriptions.length]);
+
+  useEffect(() => {
+    const storedYears = window.localStorage.getItem(TRACKER_YEARS_STORAGE_KEY);
+
+    if (!storedYears) {
+      return;
+    }
+
+    try {
+      const parsedYears = JSON.parse(storedYears);
+
+      if (!Array.isArray(parsedYears)) {
+        return;
+      }
+
+      const normalizedYears = parsedYears
+        .filter((value): value is number => Number.isInteger(value))
+        .filter((year) => year >= TRACKER_MIN_YEAR)
+        .sort((left, right) => left - right)
+        .filter((year, index, items) => items.indexOf(year) === index);
+
+      if (normalizedYears.length) {
+        setTrackerYears(normalizedYears);
+      }
+    } catch (storageError) {
+      console.error(storageError);
+    }
+  }, []);
+
+  useEffect(() => {
+    const storedSections = window.localStorage.getItem(TRACKER_SECTION_VISIBILITY_STORAGE_KEY);
+
+    if (!storedSections) {
+      return;
+    }
+
+    try {
+      const parsedSections = JSON.parse(storedSections);
+
+      if (!parsedSections || typeof parsedSections !== "object") {
+        return;
+      }
+
+      setTrackerSectionVisibility({
+        ...DEFAULT_TRACKER_SECTION_VISIBILITY,
+        weight: parsedSections.weight !== false,
+        sport: parsedSections.sport !== false,
+        habits: parsedSections.habits !== false,
+        nutrition: parsedSections.nutrition !== false,
+        notes: parsedSections.notes !== false,
+      });
+    } catch (storageError) {
+      console.error(storageError);
+    }
+  }, []);
+
+  useEffect(() => {
+    const now = new Date();
+    setTrackerMonth(now.getMonth() + 1);
+  }, []);
+
+  useEffect(() => {
+    const currentYear = new Date().getFullYear();
+
+    setTrackerYear((current) => {
+      if (trackerYears.includes(current)) {
+        return current;
+      }
+
+      if (trackerYears.includes(currentYear)) {
+        return currentYear;
+      }
+
+      return trackerYears[trackerYears.length - 1] ?? TRACKER_MIN_YEAR;
+    });
+  }, [trackerYears]);
 
   useEffect(() => {
     const storedOrder = window.localStorage.getItem(AGGREGATE_COLUMN_ORDER_STORAGE_KEY);
@@ -156,6 +449,14 @@ function App() {
       console.error(storageError);
     }
   }, []);
+
+  useEffect(() => {
+    if (activeView !== "tracker") {
+      return;
+    }
+
+    void refreshTrackerEntries();
+  }, [activeView, trackerYear, trackerMonth]);
 
   useEffect(() => {
     if (!workspace?.projects.length) {
@@ -200,6 +501,170 @@ function App() {
       return null;
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  async function refreshTrackerEntries() {
+    try {
+      const rows = await loadTrackerEntries(trackerYear, trackerMonth);
+      setTrackerEntries(rows);
+    } catch (loadError) {
+      setError("Non sono riuscito a caricare i dati del tracker.");
+      console.error(loadError);
+    }
+  }
+
+  async function refreshMeasurementEntries() {
+    try {
+      const rows = await loadMeasurementEntries();
+      setMeasurementEntries(rows);
+    } catch (loadError) {
+      setError("Non sono riuscito a caricare le misurazioni corporee.");
+      console.error(loadError);
+    }
+  }
+
+  async function refreshReadingItems() {
+    try {
+      const rows = await loadReadingItems();
+      setReadingItems(rows);
+    } catch (loadError) {
+      setError("Non sono riuscito a caricare i libri.");
+      console.error(loadError);
+    }
+  }
+
+  async function refreshSubscriptions() {
+    try {
+      const rows = await loadSubscriptions();
+      setSubscriptions(rows);
+    } catch (loadError) {
+      setError("Non sono riuscito a caricare gli abbonamenti.");
+      console.error(loadError);
+    }
+  }
+
+  async function refreshTrackerWorkoutActivities() {
+    try {
+      const rows = await loadTrackerWorkoutActivities();
+      setTrackerWorkoutActivities(rows);
+    } catch (loadError) {
+      setError("Non sono riuscito a caricare la lista attivita sportive.");
+      console.error(loadError);
+    }
+  }
+
+  async function refreshTrackerHabitPreferences() {
+    try {
+      const rows = await loadTrackerHabitPreferences();
+      setTrackerHabitPreferences(rows);
+    } catch (loadError) {
+      setError("Non sono riuscito a caricare le preferenze abitudini.");
+      console.error(loadError);
+    }
+  }
+
+  async function handleSaveTrackerEntry(input: UpsertTrackerEntryInput) {
+    try {
+      await upsertTrackerEntry(input);
+      const updatedAt = new Date().toISOString();
+
+      setTrackerEntries((current) => {
+        const otherEntries = current.filter((entry) => entry.date !== input.date);
+
+        return [
+          ...otherEntries,
+          {
+            ...input,
+            updatedAt,
+          },
+        ].sort((left, right) => left.date.localeCompare(right.date));
+      });
+    } catch (saveError) {
+      setError("Non sono riuscito a salvare il giorno del tracker.");
+      console.error(saveError);
+    }
+  }
+
+  async function handleSaveMeasurementEntry(input: UpsertMeasurementEntryInput) {
+    try {
+      await upsertMeasurementEntry(input);
+      const updatedAt = new Date().toISOString();
+
+      setMeasurementEntries((current) => {
+        const otherEntries = current.filter((entry) => entry.date !== input.date);
+
+        return [
+          ...otherEntries,
+          {
+            ...input,
+            updatedAt,
+          },
+        ].sort((left, right) => right.date.localeCompare(left.date));
+      });
+    } catch (saveError) {
+      setError("Non sono riuscito a salvare le misurazioni corporee.");
+      console.error(saveError);
+      throw saveError;
+    }
+  }
+
+  async function handleSaveReadingItem(input: UpsertReadingInput) {
+    try {
+      await upsertReadingItem(input);
+      await refreshReadingItems();
+    } catch (saveError) {
+      setError("Non sono riuscito a salvare il libro.");
+      console.error(saveError);
+      throw saveError;
+    }
+  }
+
+  async function handleDeleteReadingItem(id: string) {
+    try {
+      await deleteReadingItem(id);
+      setReadingItems((current) => current.filter((item) => item.id !== id));
+    } catch (deleteError) {
+      setError("Non sono riuscito a eliminare il libro.");
+      console.error(deleteError);
+      throw deleteError;
+    }
+  }
+
+  async function handleSaveSubscription(input: UpsertSubscriptionInput) {
+    try {
+      const id = await upsertSubscription(input);
+      const rows = await loadSubscriptions();
+      setSubscriptions(rows);
+
+      window.localStorage.removeItem(LEGACY_SUBSCRIPTIONS_STORAGE_KEY);
+      return id;
+    } catch (saveError) {
+      setError("Non sono riuscito a salvare l'abbonamento.");
+      console.error(saveError);
+      throw saveError;
+    }
+  }
+
+  async function handleDeleteSubscription(id: string) {
+    try {
+      await deleteSubscription(id);
+      setSubscriptions((current) => current.filter((item) => item.id !== id));
+    } catch (deleteError) {
+      setError("Non sono riuscito a eliminare l'abbonamento.");
+      console.error(deleteError);
+      throw deleteError;
+    }
+  }
+
+  async function handleDeleteMeasurementEntry(date: string) {
+    try {
+      await deleteMeasurementEntry(date);
+      setMeasurementEntries((current) => current.filter((entry) => entry.date !== date));
+    } catch (deleteError) {
+      setError("Non sono riuscito a eliminare la misurazione.");
+      console.error(deleteError);
+      throw deleteError;
     }
   }
 
@@ -258,6 +723,7 @@ function App() {
         lane: "general",
         startDate: taskForm.startDate || null,
         dueDate: taskForm.dueDate || null,
+        timelineColor: null,
       });
 
       setTaskForm((current) => ({
@@ -345,6 +811,7 @@ function App() {
 
   const allColumnsById = new Map(columns.map((column) => [column.id, column]));
   const projectNamesById = new Map(projects.map((project) => [project.id, project.name]));
+  const projectAccentById = new Map(projects.map((project) => [project.id, project.accent]));
 
   function collectProjectTreeIds(projectId: string) {
     const collected = new Set<string>([projectId]);
@@ -416,14 +883,7 @@ function App() {
         icon: column.icon,
         position,
       }))
-    : effectiveProjectColumns.map((column, position) => ({
-        id: `${AGGREGATE_COLUMN_PREFIX}${column.name}`,
-        projectId: selectedProjectId,
-        name: column.name,
-        color: column.color,
-        icon: column.icon,
-        position,
-      }));
+    : effectiveProjectColumns;
   const editableProjectColumns = (isAllWorkspaces ? selectedProjectColumns : effectiveProjectColumns).filter(
     (column) => column.name !== ARCHIVED_COLUMN_NAME,
   );
@@ -432,12 +892,7 @@ function App() {
         ...task,
         columnId: `${AGGREGATE_COLUMN_PREFIX}${allColumnsById.get(task.columnId)?.name ?? "Backlog"}`,
       }))
-    : tasks
-        .filter((task) => selectedProjectTreeIds.has(task.projectId))
-        .map((task) => ({
-          ...task,
-          columnId: `${AGGREGATE_COLUMN_PREFIX}${allColumnsById.get(task.columnId)?.name ?? "Backlog"}`,
-        }))
+    : tasks.filter((task) => selectedProjectTreeIds.has(task.projectId))
   ).sort((left, right) => left.position - right.position);
   const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? null;
   const selectedTaskProject =
@@ -490,6 +945,7 @@ function App() {
 
   function switchProject(projectId: string, nextView: ViewMode, taskId?: string) {
     setSelectedProjectId(projectId);
+    setColorPickerProjectId(null);
     if (taskId) {
       setSelectedTaskId(taskId);
     }
@@ -507,6 +963,7 @@ function App() {
   }
 
   function openWorkspaceEditModal(project: { id: string; name: string; description: string }) {
+    setColorPickerProjectId(null);
     setWorkspaceEditForm({
       projectId: project.id,
       name: project.name,
@@ -564,10 +1021,56 @@ function App() {
 
   function closeSettings() {
     setIsSettingsOpen(false);
+    setIsTrackerActivitiesModalOpen(false);
+    setIsTrackerHabitsModalOpen(false);
+    setIsTrackerSectionsModalOpen(false);
+    setTrackerActivityName("");
   }
 
-  function toggleIconPicker(projectId: string) {
-    setIconPickerProjectId((current) => (current === projectId ? null : projectId));
+  function openTrackerActivitiesModal() {
+    setTrackerActivityName("");
+    setIsTrackerActivitiesModalOpen(true);
+  }
+
+  function closeTrackerActivitiesModal() {
+    setIsTrackerActivitiesModalOpen(false);
+    setTrackerActivityName("");
+  }
+
+  function openTrackerHabitsModal() {
+    setIsTrackerHabitsModalOpen(true);
+  }
+
+  function closeTrackerHabitsModal() {
+    setIsTrackerHabitsModalOpen(false);
+  }
+
+  function openTrackerSectionsModal() {
+    setIsTrackerSectionsModalOpen(true);
+  }
+
+  function closeTrackerSectionsModal() {
+    setIsTrackerSectionsModalOpen(false);
+  }
+
+  function handleToggleTrackerSection(sectionKey: TrackerSectionKey, visible: boolean) {
+    setTrackerSectionVisibility((current) => {
+      const next = {
+        ...current,
+        [sectionKey]: visible,
+      };
+
+      window.localStorage.setItem(
+        TRACKER_SECTION_VISIBILITY_STORAGE_KEY,
+        JSON.stringify(next),
+      );
+
+      return next;
+    });
+  }
+
+  function toggleColorPicker(projectId: string) {
+    setColorPickerProjectId((current) => (current === projectId ? null : projectId));
   }
 
   function openArchiveModal() {
@@ -592,12 +1095,14 @@ function App() {
         const targetName = targetColumnId.replace(AGGREGATE_COLUMN_PREFIX, "");
         const task = tasks.find((item) => item.id === taskId);
         const currentColumnOwnerId = task ? allColumnsById.get(task.columnId)?.projectId : null;
-        const targetColumn = columns.find(
+        const targetColumn =
+          columns.find(
           (column) => column.projectId === currentColumnOwnerId && column.name === targetName,
-        );
+          ) ??
+          columns.find((column) => column.name === targetName);
 
         if (!targetColumn) {
-          return;
+          throw new Error(`Target column not found for ${targetName}`);
         }
 
         resolvedTargetColumnId = targetColumn.id;
@@ -615,7 +1120,6 @@ function App() {
       await moveTask(taskId, resolvedTargetColumnId, targetIndex);
 
       await refreshWorkspace();
-      setSelectedTaskId(taskId);
     } catch (moveError) {
       if (previousWorkspace) {
         setWorkspace(previousWorkspace);
@@ -696,6 +1200,7 @@ function App() {
     effort: string;
     startDate: string | null;
     dueDate: string | null;
+    timelineColor: string | null;
   }) {
     try {
       await updateTask(input);
@@ -703,6 +1208,16 @@ function App() {
       setSelectedTaskId(null);
     } catch (updateError) {
       setError("Non sono riuscito a salvare l'evento.");
+      console.error(updateError);
+    }
+  }
+
+  async function handleQuickSetTaskPriority(taskId: string, effort: string) {
+    try {
+      await updateTaskPriority(taskId, effort);
+      await refreshWorkspace();
+    } catch (updateError) {
+      setError("Non sono riuscito ad aggiornare la priorita.");
       console.error(updateError);
     }
   }
@@ -737,13 +1252,23 @@ function App() {
     }
   }
 
-  async function handleUpdateProjectIcon(projectId: string, icon: string) {
+  async function handleDeleteChecklistItem(itemId: string) {
     try {
-      await updateProjectIcon(projectId, icon);
-      setIconPickerProjectId(null);
+      await deleteChecklistItem(itemId);
+      await refreshWorkspace();
+    } catch (deleteError) {
+      setError("Non sono riuscito a eliminare il punto dalla checklist.");
+      console.error(deleteError);
+    }
+  }
+
+  async function handleUpdateProjectColor(projectId: string, accent: string) {
+    try {
+      await updateProjectAccent(projectId, accent);
+      setColorPickerProjectId(null);
       await refreshWorkspace();
     } catch (updateError) {
-      setError("Non sono riuscito ad aggiornare l'icona del workspace.");
+      setError("Non sono riuscito ad aggiornare il colore del workspace.");
       console.error(updateError);
     }
   }
@@ -752,6 +1277,84 @@ function App() {
     setError(
       "Collegamento Google Calendar non ancora attivato: per completarlo serve configurare OAuth Desktop/PKCE senza salvare il client secret nell'app.",
     );
+  }
+
+  async function handleCreateTrackerActivity(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nextName = trackerActivityName.trim();
+
+    if (!nextName) {
+      return;
+    }
+
+    try {
+      await createTrackerWorkoutActivity(nextName);
+      setTrackerActivityName("");
+      await refreshTrackerWorkoutActivities();
+    } catch (createError) {
+      setError("Non sono riuscito ad aggiungere l'attivita sportiva.");
+      console.error(createError);
+    }
+  }
+
+  async function handleDeleteTrackerActivity(name: string) {
+    try {
+      await deleteTrackerWorkoutActivity(name);
+      await refreshTrackerWorkoutActivities();
+    } catch (deleteError) {
+      setError("Non sono riuscito a rimuovere l'attivita sportiva.");
+      console.error(deleteError);
+    }
+  }
+
+  async function handleUpdateTrackerHabit(
+    habitKey: TrackerHabitKey,
+    patch: Partial<Pick<TrackerHabitPreference, "color" | "hidden">>,
+  ) {
+    const current = trackerHabitPreferences.find((habit) => habit.key === habitKey);
+
+    if (!current) {
+      return;
+    }
+
+    const nextHabit: TrackerHabitPreference = {
+      ...current,
+      ...patch,
+      color: patch.color ?? current.color,
+      hidden: patch.hidden ?? current.hidden,
+    };
+
+    setTrackerHabitPreferences((items) =>
+      items.map((habit) => (habit.key === habitKey ? nextHabit : habit)),
+    );
+
+    try {
+      await updateTrackerHabitPreference({
+        habitKey,
+        color: nextHabit.color,
+        hidden: nextHabit.hidden,
+      });
+    } catch (updateError) {
+      setError("Non sono riuscito ad aggiornare le preferenze dell'abitudine.");
+      console.error(updateError);
+      await refreshTrackerHabitPreferences();
+    }
+  }
+
+  function handleAddTrackerYear() {
+    setTrackerYears((current) => {
+      const maxYear = current.length
+        ? Math.max(...current)
+        : TRACKER_MIN_YEAR - 1;
+      const nextYear = maxYear + 1;
+      const nextYears = [...current, nextYear];
+      window.localStorage.setItem(
+        TRACKER_YEARS_STORAGE_KEY,
+        JSON.stringify(nextYears),
+      );
+      setTrackerYear(nextYear);
+      return nextYears;
+    });
   }
 
   async function handleUpdateColumn(columnId: string) {
@@ -873,6 +1476,8 @@ function App() {
             { id: "home", label: "Home" },
             { id: "calendar", label: "Calendario" },
             { id: "tracker", label: "Tracker" },
+            { id: "measurements", label: "Misurazioni" },
+            { id: "subscriptions", label: "Abbonamenti" },
             { id: "workout", label: "Workout" },
             { id: "reading", label: "Lettura" },
             { id: "goals", label: "Obiettivi" },
@@ -883,7 +1488,11 @@ function App() {
               type="button"
               className={
                 (item.id === "home" && activeView === "home") ||
-                (item.id === "board" && activeView !== "home")
+                (item.id === "tracker" && activeView === "tracker") ||
+                (item.id === "measurements" && activeView === "measurements") ||
+                (item.id === "subscriptions" && activeView === "subscriptions") ||
+                (item.id === "reading" && activeView === "reading") ||
+                (item.id === "board" && (activeView === "board" || activeView === "timeline"))
                   ? "is-active"
                   : ""
               }
@@ -892,12 +1501,33 @@ function App() {
                   setActiveView("home");
                 }
 
+                if (item.id === "tracker") {
+                  setActiveView("tracker");
+                }
+
+                if (item.id === "measurements") {
+                  setActiveView("measurements");
+                }
+
+                if (item.id === "subscriptions") {
+                  setActiveView("subscriptions");
+                }
+
+                if (item.id === "reading") {
+                  setActiveView("reading");
+                }
+
                 if (item.id === "board") {
                   setActiveView("board");
                 }
               }}
             >
-              {item.label}
+              <span className="top-header__nav-item">
+                <span className="top-header__nav-icon">
+                  {renderHeaderMenuIcon(item.id)}
+                </span>
+                <span>{item.label}</span>
+              </span>
             </button>
           ))}
         </nav>
@@ -914,7 +1544,47 @@ function App() {
       <section className="content-shell">
         {activeView === "home" ? renderHome() : null}
 
-        {activeView !== "home" ? (
+        {activeView === "tracker" ? (
+          <TrackerView
+            year={trackerYear}
+            month={trackerMonth}
+            years={trackerYears}
+            entries={trackerEntries}
+            workoutActivities={trackerWorkoutActivities}
+            habitPreferences={trackerHabitPreferences}
+            sectionVisibility={trackerSectionVisibility}
+            onAddYear={handleAddTrackerYear}
+            onChangeYear={setTrackerYear}
+            onChangeMonth={setTrackerMonth}
+            onSaveEntry={(input) => void handleSaveTrackerEntry(input)}
+          />
+        ) : null}
+
+        {activeView === "measurements" ? (
+          <MeasurementsView
+            entries={measurementEntries}
+            onSaveEntry={(input) => handleSaveMeasurementEntry(input)}
+            onDeleteEntry={(date) => handleDeleteMeasurementEntry(date)}
+          />
+        ) : null}
+
+        {activeView === "subscriptions" ? (
+          <SubscriptionsView
+            items={subscriptions}
+            onSave={(input) => handleSaveSubscription(input)}
+            onDelete={(id) => handleDeleteSubscription(id)}
+          />
+        ) : null}
+
+        {activeView === "reading" ? (
+          <ReadingView
+            items={readingItems}
+            onSave={(input) => handleSaveReadingItem(input)}
+            onDelete={(id) => handleDeleteReadingItem(id)}
+          />
+        ) : null}
+
+        {activeView === "board" || activeView === "timeline" ? (
           <div className="app-shell">
             <aside className="sidebar">
               <nav className="view-switcher" aria-label="Viste principali">
@@ -928,7 +1598,26 @@ function App() {
                     className={activeView === view.id ? "is-active" : ""}
                     onClick={() => setActiveView(view.id as ViewMode)}
                   >
-                    {view.label}
+                    <span className="view-switcher__item">
+                      <span className="view-switcher__icon" aria-hidden="true">
+                        {view.id === "board" ? (
+                          <svg viewBox="0 0 24 24" className="view-switcher__icon-svg">
+                            <rect x="3" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
+                            <rect x="14" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
+                            <rect x="3" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
+                            <rect x="14" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
+                          </svg>
+                        ) : (
+                          <svg viewBox="0 0 24 24" className="view-switcher__icon-svg">
+                            <path d="M4 6h16M4 12h16M4 18h16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                            <circle cx="9" cy="6" r="1.8" fill="currentColor" />
+                            <circle cx="15" cy="12" r="1.8" fill="currentColor" />
+                            <circle cx="12" cy="18" r="1.8" fill="currentColor" />
+                          </svg>
+                        )}
+                      </span>
+                      <span className="view-switcher__label">{view.label}</span>
+                    </span>
                   </button>
                 ))}
               </nav>
@@ -972,16 +1661,18 @@ function App() {
                     >
                       <button
                         type="button"
-                        className="project-chip__icon-button"
-                        aria-label={`Cambia icona workspace ${project.name}`}
+                        className="project-chip__color-button"
+                        aria-label={`Scegli colore workspace ${project.name}`}
                         onClick={(event) => {
                           event.stopPropagation();
-                          toggleIconPicker(project.id);
+                          toggleColorPicker(project.id);
                         }}
                       >
-                        <span className="project-chip__icon" aria-hidden="true">
-                          {project.icon}
-                        </span>
+                        <span
+                          className="project-chip__color-dot"
+                          aria-hidden="true"
+                          style={{ backgroundColor: project.accent }}
+                        />
                       </button>
                       <button
                         type="button"
@@ -1017,17 +1708,17 @@ function App() {
                           />
                         </svg>
                       </button>
-                      {iconPickerProjectId === project.id ? (
-                        <div className="project-chip__picker" onClick={(event) => event.stopPropagation()}>
-                          {WORKSPACE_ICON_OPTIONS.map((icon) => (
+                      {colorPickerProjectId === project.id ? (
+                        <div className="project-chip__color-picker" onClick={(event) => event.stopPropagation()}>
+                          {WORKSPACE_COLOR_OPTIONS.map((color) => (
                             <button
-                              key={icon}
+                              key={color}
                               type="button"
-                              className={`project-chip__picker-item ${project.icon === icon ? "is-selected" : ""}`}
-                              onClick={() => void handleUpdateProjectIcon(project.id, icon)}
-                            >
-                              {icon}
-                            </button>
+                              className={`project-chip__color-option ${project.accent === color ? "is-selected" : ""}`}
+                              style={{ ["--workspace-color" as string]: color }}
+                              onClick={() => void handleUpdateProjectColor(project.id, color)}
+                              aria-label={`Imposta colore ${color} per ${project.name}`}
+                            />
                           ))}
                         </div>
                       ) : null}
@@ -1145,10 +1836,12 @@ function App() {
                       tasks={selectedProjectTasks}
                       selectedTaskId={selectedTaskId}
                       projectNamesById={projectNamesById}
+                      dragEnabled={!isAllWorkspaces}
                       canCreateTask={canCreateTask}
                       onSelectTask={setSelectedTaskId}
                       onMoveTask={handleMoveTask}
                       onCreateTask={openTaskModal}
+                      onSetTaskPriority={(taskId, effort) => void handleQuickSetTaskPriority(taskId, effort)}
                       onAdvanceTask={(taskId) => void handleAdvanceTask(taskId)}
                       onOpenArchive={openArchiveModal}
                     />
@@ -1158,6 +1851,7 @@ function App() {
                     <TimelineView
                       project={selectedProject}
                       tasks={isAllWorkspaces ? tasks : selectedProjectTasks}
+                      projectAccentsById={projectAccentById}
                       selectedTaskId={selectedTaskId}
                       onSelectTask={setSelectedTaskId}
                     />
@@ -1168,6 +1862,11 @@ function App() {
           </div>
         ) : null}
       </section>
+
+      <div className="app-mini-footer" aria-label={`Organizer versione ${APP_VERSION}`}>
+        <span>Organizer</span>
+        <strong>v{APP_VERSION}</strong>
+      </div>
 
       {isProjectModalOpen ? (
         <div className="modal-backdrop" onClick={closeProjectModal}>
@@ -1310,14 +2009,14 @@ function App() {
               <div className="modal-actions">
                 <button
                   type="button"
-                  className="modal-button modal-button--danger"
+                  className="modal-button modal-button--workspace-delete"
                   onClick={() => void handleDeleteWorkspace(workspaceEditForm.projectId)}
                 >
                   Elimina workspace
                 </button>
                 <button
                   type="button"
-                  className="modal-button modal-button--ghost"
+                  className="modal-button modal-button--workspace-cancel"
                   onClick={closeWorkspaceEditModal}
                 >
                   Annulla
@@ -1745,6 +2444,7 @@ function App() {
           onToggleChecklistItem={(itemId, completed) =>
             void handleToggleChecklistItem(itemId, completed)
           }
+          onDeleteChecklistItem={(itemId) => void handleDeleteChecklistItem(itemId)}
         />
       ) : null}
 
@@ -1771,6 +2471,7 @@ function App() {
               <aside className="settings-sidebar">
                 {[
                   { id: "google-calendar", label: "Google Calendar" },
+                  { id: "tracker", label: "Tracker" },
                 ].map((section) => (
                   <button
                     key={section.id}
@@ -1827,7 +2528,236 @@ function App() {
                     </div>
                   </>
                 ) : null}
+
+                {activeSettingsSection === "tracker" ? (
+                  <>
+                    <div className="settings-panel__header">
+                      <div>
+                        <p className="eyebrow">Tracker</p>
+                        <h4>Abitudini e sport</h4>
+                      </div>
+                      <span className="settings-badge">Configurabile</span>
+                    </div>
+
+                    <div className="settings-card">
+                      <button
+                        type="button"
+                        className="modal-button modal-button--neutral settings-connect"
+                        onClick={openTrackerSectionsModal}
+                      >
+                        Mostra o nascondi sezioni Tracker
+                      </button>
+                      <button
+                        type="button"
+                        className="modal-button modal-button--neutral settings-connect"
+                        onClick={openTrackerHabitsModal}
+                      >
+                        Gestisci abitudini (visibilita e colore)
+                      </button>
+                      <button
+                        type="button"
+                        className="modal-button modal-button--neutral settings-connect"
+                        onClick={openTrackerActivitiesModal}
+                      >
+                        Modifica lista Attivita sportive
+                      </button>
+                    </div>
+                  </>
+                ) : null}
               </section>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isTrackerHabitsModalOpen ? (
+        <div className="modal-backdrop" onClick={closeTrackerHabitsModal}>
+          <div
+            className="modal-card modal-card--tracker-habits"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="tracker-habits-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-card__header">
+              <div>
+                <p className="eyebrow">Tracker</p>
+                <h3 id="tracker-habits-title">Abitudini: visibilita e colori</h3>
+              </div>
+              <button type="button" className="modal-close" onClick={closeTrackerHabitsModal}>
+                x
+              </button>
+            </div>
+
+            <div className="tracker-habits-list">
+              {[...trackerHabitPreferences]
+                .sort((left, right) => left.position - right.position)
+                .map((habit) => (
+                  <div key={habit.key} className="tracker-habits-item">
+                    <div className="tracker-habits-item__main">
+                      <strong>{habit.label}</strong>
+                      <small>{habit.hidden ? "Nascosta nel tracker" : "Visibile nel tracker"}</small>
+                    </div>
+                    <label className="tracker-habits-item__color">
+                      <span>Colore</span>
+                      <input
+                        type="color"
+                        value={habit.color}
+                        onChange={(event) =>
+                          void handleUpdateTrackerHabit(habit.key, {
+                            color: event.currentTarget.value,
+                          })
+                        }
+                      />
+                    </label>
+                    <label className="tracker-habits-item__toggle">
+                      <input
+                        type="checkbox"
+                        checked={habit.hidden}
+                        onChange={(event) =>
+                          void handleUpdateTrackerHabit(habit.key, {
+                            hidden: event.currentTarget.checked,
+                          })
+                        }
+                      />
+                      <span>Nascondi</span>
+                    </label>
+                  </div>
+                ))}
+            </div>
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="modal-button modal-button--ghost"
+                onClick={closeTrackerHabitsModal}
+              >
+                Chiudi
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isTrackerSectionsModalOpen ? (
+        <div className="modal-backdrop" onClick={closeTrackerSectionsModal}>
+          <div
+            className="modal-card modal-card--tracker-habits"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="tracker-sections-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-card__header">
+              <div>
+                <p className="eyebrow">Tracker</p>
+                <h3 id="tracker-sections-title">Sezioni visibili</h3>
+              </div>
+              <button type="button" className="modal-close" onClick={closeTrackerSectionsModal}>
+                x
+              </button>
+            </div>
+
+            <div className="tracker-habits-list">
+              {(Object.keys(TRACKER_SECTION_LABELS) as TrackerSectionKey[]).map((sectionKey) => (
+                <div key={sectionKey} className="tracker-habits-item tracker-habits-item--section">
+                  <div className="tracker-habits-item__main">
+                    <strong>{TRACKER_SECTION_LABELS[sectionKey]}</strong>
+                    <small>
+                      {trackerSectionVisibility[sectionKey]
+                        ? "Mostrata in ogni giorno del tracker"
+                        : "Nascosta nella vista Inserisci dati"}
+                    </small>
+                  </div>
+                  <label className="tracker-habits-item__toggle">
+                    <input
+                      type="checkbox"
+                      checked={trackerSectionVisibility[sectionKey]}
+                      onChange={(event) =>
+                        handleToggleTrackerSection(sectionKey, event.currentTarget.checked)
+                      }
+                    />
+                    <span>Mostra</span>
+                  </label>
+                </div>
+              ))}
+            </div>
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="modal-button modal-button--ghost"
+                onClick={closeTrackerSectionsModal}
+              >
+                Chiudi
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isTrackerActivitiesModalOpen ? (
+        <div className="modal-backdrop" onClick={closeTrackerActivitiesModal}>
+          <div
+            className="modal-card modal-card--tracker-activities"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="tracker-activities-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-card__header">
+              <div>
+                <p className="eyebrow">Tracker</p>
+                <h3 id="tracker-activities-title">Lista attivita sportive</h3>
+              </div>
+              <button type="button" className="modal-close" onClick={closeTrackerActivitiesModal}>
+                x
+              </button>
+            </div>
+
+            <form className="tracker-activities-form" onSubmit={handleCreateTrackerActivity}>
+              <label>
+                <span>Nuova attivita</span>
+                <input
+                  value={trackerActivityName}
+                  onChange={(event) => setTrackerActivityName(event.currentTarget.value)}
+                  placeholder="Esempio: Pilates"
+                />
+              </label>
+              <button type="submit" className="modal-button">
+                Aggiungi
+              </button>
+            </form>
+
+            <div className="tracker-activities-list">
+              {trackerWorkoutActivities.length ? (
+                trackerWorkoutActivities.map((activity) => (
+                  <div key={activity} className="tracker-activities-item">
+                    <strong>{activity}</strong>
+                    <button
+                      type="button"
+                      className="modal-button modal-button--danger"
+                      onClick={() => void handleDeleteTrackerActivity(activity)}
+                    >
+                      Rimuovi
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <p className="tracker-activities-empty">
+                  Nessuna attivita disponibile. Aggiungine almeno una.
+                </p>
+              )}
+            </div>
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="modal-button modal-button--ghost"
+                onClick={closeTrackerActivitiesModal}
+              >
+                Chiudi
+              </button>
             </div>
           </div>
         </div>

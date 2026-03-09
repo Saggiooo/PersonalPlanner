@@ -1,10 +1,6 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { PRIORITY_OPTIONS, getPriorityMeta } from "../lib/priorities";
+import { PRIORITY_OPTIONS } from "../lib/priorities";
 import type { BoardColumn, ChecklistItem, Project, Task } from "../lib/types";
-
-function stripHtml(html: string) {
-  return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-}
 
 interface TaskDetailModalProps {
   task: Task | null;
@@ -19,10 +15,12 @@ interface TaskDetailModalProps {
     effort: string;
     startDate: string | null;
     dueDate: string | null;
+    timelineColor: string | null;
   }) => void;
   onAdvance: (taskId: string) => void;
   onAddChecklistItem: (taskId: string, label: string) => void;
   onToggleChecklistItem: (itemId: string, completed: boolean) => void;
+  onDeleteChecklistItem: (itemId: string) => void;
 }
 
 function formatDate(value: string | null) {
@@ -45,14 +43,21 @@ export function TaskDetailModal({
   onAdvance,
   onAddChecklistItem,
   onToggleChecklistItem,
+  onDeleteChecklistItem,
 }: TaskDetailModalProps) {
   const editorRef = useRef<HTMLDivElement | null>(null);
+  const [editorBlock, setEditorBlock] = useState<"p" | "h1" | "h2" | "h3" | "ul">("p");
+  const [editorMarks, setEditorMarks] = useState({
+    bold: false,
+    underline: false,
+  });
   const [draft, setDraft] = useState({
     title: "",
     notes: "",
     effort: "Normale",
     startDate: "",
     dueDate: "",
+    timelineColor: "",
   });
   const [checklistLabel, setChecklistLabel] = useState("");
 
@@ -67,6 +72,7 @@ export function TaskDetailModal({
       effort: task.effort,
       startDate: task.startDate ?? "",
       dueDate: task.dueDate ?? "",
+      timelineColor: task.timelineColor ?? "",
     });
     setChecklistLabel("");
   }, [task]);
@@ -81,6 +87,44 @@ export function TaskDetailModal({
     }
   }, [draft.notes]);
 
+  useEffect(() => {
+    function syncEditorState() {
+      const selection = window.getSelection();
+      const anchorNode = selection?.anchorNode;
+      const element =
+        anchorNode instanceof Element
+          ? anchorNode
+          : anchorNode?.parentElement ?? null;
+      const container = element?.closest(".task-editor__surface");
+
+      if (!container || container !== editorRef.current) {
+        return;
+      }
+
+      const blockElement = element?.closest("h1, h2, h3, p, li");
+
+      if (blockElement?.tagName === "H1") {
+        setEditorBlock("h1");
+      } else if (blockElement?.tagName === "H2") {
+        setEditorBlock("h2");
+      } else if (blockElement?.tagName === "H3") {
+        setEditorBlock("h3");
+      } else if (blockElement?.tagName === "LI") {
+        setEditorBlock("ul");
+      } else {
+        setEditorBlock("p");
+      }
+
+      setEditorMarks({
+        bold: document.queryCommandState("bold"),
+        underline: document.queryCommandState("underline"),
+      });
+    }
+
+    document.addEventListener("selectionchange", syncEditorState);
+    return () => document.removeEventListener("selectionchange", syncEditorState);
+  }, []);
+
   if (!task || !project) {
     return null;
   }
@@ -93,7 +137,6 @@ export function TaskDetailModal({
     taskColumns.find((column) => column.id === currentTask.columnId) ?? null;
   const currentIndex = taskColumns.findIndex((column) => column.id === currentTask.columnId);
   const nextColumn = currentIndex >= 0 ? taskColumns[currentIndex + 1] ?? null : null;
-  const priority = getPriorityMeta(draft.effort);
   const taskChecklist = checklistItems.filter((item) => item.taskId === currentTask.id);
   const completedItems = taskChecklist.filter((item) => item.completed).length;
 
@@ -107,12 +150,11 @@ export function TaskDetailModal({
       effort: draft.effort,
       startDate: draft.startDate || null,
       dueDate: draft.dueDate || null,
+      timelineColor: draft.timelineColor || null,
     });
   }
 
-  function handleAddChecklistItem(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
+  function handleAddChecklistItem() {
     if (!checklistLabel.trim()) {
       return;
     }
@@ -134,6 +176,31 @@ export function TaskDetailModal({
     editorRef.current?.focus();
     document.execCommand(command, false, value);
     syncNotesFromEditor();
+    const selection = window.getSelection();
+
+    if (selection?.anchorNode) {
+      const anchorElement =
+        selection.anchorNode instanceof Element
+          ? selection.anchorNode
+          : selection.anchorNode.parentElement ?? null;
+
+      if (anchorElement?.closest("h1")) {
+        setEditorBlock("h1");
+      } else if (anchorElement?.closest("h2")) {
+        setEditorBlock("h2");
+      } else if (anchorElement?.closest("h3")) {
+        setEditorBlock("h3");
+      } else if (anchorElement?.closest("li")) {
+        setEditorBlock("ul");
+      } else {
+        setEditorBlock("p");
+      }
+    }
+
+    setEditorMarks({
+      bold: document.queryCommandState("bold"),
+      underline: document.queryCommandState("underline"),
+    });
   }
 
   return (
@@ -242,14 +309,6 @@ export function TaskDetailModal({
             </div>
           </div>
 
-          <div className="task-detail__fact task-detail__fact--priority">
-            <span>Priorita attuale</span>
-            <strong className={`priority-badge priority-badge--${priority.tone}`}>
-              <span className="priority-badge__dot" />
-              {priority.label}
-            </strong>
-          </div>
-
           <div className="task-detail__fact">
             <span>Finestra</span>
             <strong>
@@ -257,29 +316,99 @@ export function TaskDetailModal({
             </strong>
           </div>
 
+          <div className="task-detail__fact task-detail__fact--timeline-color">
+            <span>Colore evento timeline</span>
+            <div className="task-detail__timeline-color-controls">
+              <input
+                type="color"
+                className="task-detail__timeline-color-input"
+                value={draft.timelineColor || project.accent || "#5e6bff"}
+                onChange={(event) => {
+                  const value = event.currentTarget.value;
+
+                  setDraft((current) => ({
+                    ...current,
+                    timelineColor: value,
+                  }));
+                }}
+                aria-label="Scegli colore personalizzato per evento timeline"
+              />
+              <button
+                type="button"
+                className="task-detail__timeline-color-reset"
+                onClick={() =>
+                  setDraft((current) => ({
+                    ...current,
+                    timelineColor: "",
+                  }))
+                }
+              >
+                Usa colore workspace
+              </button>
+            </div>
+          </div>
+
           <label className="task-detail__description">
             <span>Descrizione</span>
             <div className="task-editor">
               <div className="task-editor__toolbar" role="toolbar" aria-label="Formato descrizione">
-                <button type="button" onClick={() => applyEditorCommand("formatBlock", "<h1>")}>
-                  H1
-                </button>
-                <button type="button" onClick={() => applyEditorCommand("formatBlock", "<h2>")}>
-                  H2
-                </button>
-                <button type="button" onClick={() => applyEditorCommand("formatBlock", "<h3>")}>
-                  H3
-                </button>
-                <button type="button" onClick={() => applyEditorCommand("bold")}>
-                  B
-                </button>
-                <button type="button" onClick={() => applyEditorCommand("underline")}>
-                  U
-                </button>
-                <button type="button" onClick={() => applyEditorCommand("insertUnorderedList")}>
-                  • Elenco
-                </button>
+                <div className="task-editor__toolbar-group">
+                  <button
+                    type="button"
+                    className={editorBlock === "p" ? "is-active" : ""}
+                    onClick={() => applyEditorCommand("formatBlock", "<p>")}
+                  >
+                    Paragrafo
+                  </button>
+                  <button
+                    type="button"
+                    className={editorBlock === "h1" ? "is-active" : ""}
+                    onClick={() => applyEditorCommand("formatBlock", "<h1>")}
+                  >
+                    Titolo 1
+                  </button>
+                  <button
+                    type="button"
+                    className={editorBlock === "h2" ? "is-active" : ""}
+                    onClick={() => applyEditorCommand("formatBlock", "<h2>")}
+                  >
+                    Titolo 2
+                  </button>
+                  <button
+                    type="button"
+                    className={editorBlock === "h3" ? "is-active" : ""}
+                    onClick={() => applyEditorCommand("formatBlock", "<h3>")}
+                  >
+                    Titolo 3
+                  </button>
+                </div>
+                <div className="task-editor__toolbar-group">
+                  <button
+                    type="button"
+                    className={editorMarks.bold ? "is-active" : ""}
+                    onClick={() => applyEditorCommand("bold")}
+                  >
+                    Grassetto
+                  </button>
+                  <button
+                    type="button"
+                    className={editorMarks.underline ? "is-active" : ""}
+                    onClick={() => applyEditorCommand("underline")}
+                  >
+                    Sottolineato
+                  </button>
+                  <button
+                    type="button"
+                    className={editorBlock === "ul" ? "is-active" : ""}
+                    onClick={() => applyEditorCommand("insertUnorderedList")}
+                  >
+                    Elenco puntato
+                  </button>
+                </div>
               </div>
+              <p className="task-editor__hint">
+                Usa Paragrafo per il testo normale. I titoli servono solo per dare struttura.
+              </p>
               <div
                 ref={editorRef}
                 className="task-editor__surface"
@@ -289,9 +418,6 @@ export function TaskDetailModal({
                 data-placeholder="Scrivi una descrizione piu ricca, con titoli, enfasi ed elenchi."
               />
             </div>
-            <small className="task-detail__description-hint">
-              Anteprima card: {stripHtml(draft.notes) || "nessun testo ancora"}
-            </small>
           </label>
 
           <section className="task-detail__checklist">
@@ -307,33 +433,51 @@ export function TaskDetailModal({
             <div className="task-checklist">
               {taskChecklist.length ? (
                 taskChecklist.map((item) => (
-                  <label
+                  <div
                     key={item.id}
                     className={`task-checklist__item ${item.completed ? "is-complete" : ""}`}
                   >
-                    <input
-                      type="checkbox"
-                      checked={item.completed}
-                      onChange={(event) =>
-                        onToggleChecklistItem(item.id, event.currentTarget.checked)
-                      }
-                    />
-                    <span>{item.label}</span>
-                  </label>
+                    <label className="task-checklist__toggle">
+                      <input
+                        type="checkbox"
+                        checked={item.completed}
+                        onChange={(event) =>
+                          onToggleChecklistItem(item.id, event.currentTarget.checked)
+                        }
+                      />
+                      <span>{item.label}</span>
+                    </label>
+                    <button
+                      type="button"
+                      className="task-checklist__remove"
+                      onClick={() => onDeleteChecklistItem(item.id)}
+                      aria-label={`Elimina voce checklist ${item.label}`}
+                    >
+                      Elimina
+                    </button>
+                  </div>
                 ))
               ) : (
                 <p className="task-checklist__empty">Nessun punto ancora nella checklist.</p>
               )}
             </div>
 
-            <form className="task-checklist__form" onSubmit={handleAddChecklistItem}>
+            <div className="task-checklist__form">
               <input
                 value={checklistLabel}
                 onChange={(event) => setChecklistLabel(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    handleAddChecklistItem();
+                  }
+                }}
                 placeholder="Aggiungi un task alla checklist"
               />
-              <button type="submit">Aggiungi</button>
-            </form>
+              <button type="button" className="task-checklist__add" onClick={handleAddChecklistItem}>
+                Aggiungi
+              </button>
+            </div>
           </section>
 
           <div className="modal-actions">

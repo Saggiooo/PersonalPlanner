@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { ARCHIVED_COLUMN_NAME } from "../lib/database";
 import {
   DndContext,
@@ -18,22 +18,20 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ColumnIcon } from "../lib/columnIcons";
-import { getPriorityMeta } from "../lib/priorities";
+import { PRIORITY_OPTIONS, getPriorityMeta } from "../lib/priorities";
 import type { BoardColumn, Task } from "../lib/types";
-
-function stripHtml(html: string) {
-  return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-}
 
 interface KanbanBoardProps {
   columns: BoardColumn[];
   tasks: Task[];
   selectedTaskId: string | null;
   projectNamesById: Map<string, string>;
+  dragEnabled: boolean;
   canCreateTask: boolean;
   onSelectTask: (taskId: string) => void;
   onMoveTask: (taskId: string, targetColumnId: string, targetIndex: number) => void;
   onCreateTask: (columnId: string) => void;
+  onSetTaskPriority: (taskId: string, effort: string) => void;
   onAdvanceTask: (taskId: string) => void;
   onOpenArchive: () => void;
 }
@@ -43,10 +41,15 @@ interface BoardColumnCardProps {
   tasks: Task[];
   selectedTaskId: string | null;
   projectNamesById: Map<string, string>;
+  dragEnabled: boolean;
   canCreateTask: boolean;
   onSelectTask: (taskId: string) => void;
   shouldSuppressClick: () => boolean;
   onCreateTask: (columnId: string) => void;
+  onSetTaskPriority: (taskId: string, effort: string) => void;
+  openPriorityTaskId: string | null;
+  onTogglePriorityMenu: (taskId: string) => void;
+  onClosePriorityMenu: () => void;
   onAdvanceTask: (taskId: string) => void;
   onOpenArchive: () => void;
 }
@@ -64,23 +67,61 @@ function parseId(rawId: string) {
   return { kind, value };
 }
 
+const PRIORITY_RANK_BY_LABEL: Record<string, number> = {
+  Urgente: 0,
+  Alta: 1,
+  Normale: 2,
+  Bassa: 3,
+  Nessuna: 4,
+};
+
+function compareTasksByPriority(left: Task, right: Task) {
+  const leftLabel = getPriorityMeta(left.effort).label;
+  const rightLabel = getPriorityMeta(right.effort).label;
+  const leftRank = PRIORITY_RANK_BY_LABEL[leftLabel] ?? PRIORITY_RANK_BY_LABEL.Nessuna;
+  const rightRank = PRIORITY_RANK_BY_LABEL[rightLabel] ?? PRIORITY_RANK_BY_LABEL.Nessuna;
+
+  if (leftRank !== rightRank) {
+    return leftRank - rightRank;
+  }
+
+  if (left.position !== right.position) {
+    return left.position - right.position;
+  }
+
+  return left.createdAt.localeCompare(right.createdAt);
+}
+
+function sortTasksByPriority(input: Task[]) {
+  return [...input].sort(compareTasksByPriority);
+}
+
 function SortableTaskCard({
   task,
   selectedTaskId,
   projectNamesById,
+  dragEnabled,
   onSelectTask,
   shouldSuppressClick,
+  onSetTaskPriority,
+  openPriorityTaskId,
+  onTogglePriorityMenu,
+  onClosePriorityMenu,
   onAdvanceTask,
 }: {
   task: Task;
   selectedTaskId: string | null;
   projectNamesById: Map<string, string>;
+  dragEnabled: boolean;
   onSelectTask: (taskId: string) => void;
   shouldSuppressClick: () => boolean;
+  onSetTaskPriority: (taskId: string, effort: string) => void;
+  openPriorityTaskId: string | null;
+  onTogglePriorityMenu: (taskId: string) => void;
+  onClosePriorityMenu: () => void;
   onAdvanceTask: (taskId: string) => void;
 }) {
   const priority = getPriorityMeta(task.effort);
-  const previewNotes = stripHtml(task.notes);
 
   const {
     attributes,
@@ -91,6 +132,7 @@ function SortableTaskCard({
     isDragging,
   } = useSortable({
     id: buildTaskId(task.id),
+    disabled: !dragEnabled,
     data: {
       type: "task",
       taskId: task.id,
@@ -126,16 +168,46 @@ function SortableTaskCard({
           onSelectTask(task.id);
         }
       }}
-      {...attributes}
-      {...listeners}
+      {...(dragEnabled ? attributes : {})}
+      {...(dragEnabled ? listeners : {})}
     >
       <strong>{task.title}</strong>
-      <p>{previewNotes || "Nessuna nota aggiuntiva."}</p>
       <div className="task-card__meta">
-        <span className={`task-pill task-pill--priority task-pill--${priority.tone}`}>
-          <span className="task-pill__dot" />
-          {priority.label}
-        </span>
+        <div className="task-card__priority-wrap">
+          <button
+            type="button"
+            className={`task-pill task-pill--priority task-pill--${priority.tone}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onTogglePriorityMenu(task.id);
+            }}
+          >
+            <span className="task-pill__dot" />
+            {priority.label}
+          </button>
+          {openPriorityTaskId === task.id ? (
+            <div
+              className="task-priority-menu"
+              onClick={(event) => {
+                event.stopPropagation();
+              }}
+            >
+              {PRIORITY_OPTIONS.map((priorityOption) => (
+                <button
+                  key={priorityOption}
+                  type="button"
+                  className={task.effort === priorityOption ? "is-active" : ""}
+                  onClick={() => {
+                    onSetTaskPriority(task.id, priorityOption);
+                    onClosePriorityMenu();
+                  }}
+                >
+                  {priorityOption}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
         <div className="task-card__workspace">
           <span className="task-pill">{projectNamesById.get(task.projectId) ?? task.lane}</span>
           <button
@@ -160,15 +232,21 @@ function BoardColumnCard({
   tasks,
   selectedTaskId,
   projectNamesById,
+  dragEnabled,
   canCreateTask,
   onSelectTask,
   shouldSuppressClick,
   onCreateTask,
+  onSetTaskPriority,
+  openPriorityTaskId,
+  onTogglePriorityMenu,
+  onClosePriorityMenu,
   onAdvanceTask,
   onOpenArchive,
 }: BoardColumnCardProps) {
   const { setNodeRef, isOver } = useDroppable({
     id: buildColumnId(column.id),
+    disabled: !dragEnabled,
     data: {
       type: "column",
       columnId: column.id,
@@ -227,8 +305,13 @@ function BoardColumnCard({
                 task={task}
                 selectedTaskId={selectedTaskId}
                 projectNamesById={projectNamesById}
+                dragEnabled={dragEnabled}
                 onSelectTask={onSelectTask}
                 shouldSuppressClick={shouldSuppressClick}
+                onSetTaskPriority={onSetTaskPriority}
+                openPriorityTaskId={openPriorityTaskId}
+                onTogglePriorityMenu={onTogglePriorityMenu}
+                onClosePriorityMenu={onClosePriorityMenu}
                 onAdvanceTask={onAdvanceTask}
               />
             ))}
@@ -254,14 +337,17 @@ export function KanbanBoard({
   tasks,
   selectedTaskId,
   projectNamesById,
+  dragEnabled,
   canCreateTask,
   onSelectTask,
   onMoveTask,
   onCreateTask,
+  onSetTaskPriority,
   onAdvanceTask,
   onOpenArchive,
 }: KanbanBoardProps) {
   const suppressClickUntilRef = useRef(0);
+  const [openPriorityTaskId, setOpenPriorityTaskId] = useState<string | null>(null);
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 6 },
@@ -283,6 +369,7 @@ export function KanbanBoard({
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     armClickSuppression();
+    setOpenPriorityTaskId(null);
 
     if (!over || active.id === over.id) {
       return;
@@ -302,8 +389,8 @@ export function KanbanBoard({
     }
 
     if (overMeta.kind === "column") {
-      const destinationTasks = tasks.filter(
-        (task) => task.columnId === overMeta.value && task.id !== movingTask.id,
+      const destinationTasks = sortTasksByPriority(
+        tasks.filter((task) => task.columnId === overMeta.value && task.id !== movingTask.id),
       );
 
       onMoveTask(movingTask.id, overMeta.value, destinationTasks.length);
@@ -320,16 +407,18 @@ export function KanbanBoard({
       return;
     }
 
-    const destinationTasks = tasks.filter(
-      (task) => task.columnId === targetTask.columnId && task.id !== movingTask.id,
+    const destinationTasks = sortTasksByPriority(
+      tasks.filter((task) => task.columnId === targetTask.columnId && task.id !== movingTask.id),
     );
     const targetIndex = destinationTasks.findIndex((task) => task.id === targetTask.id);
 
     onMoveTask(movingTask.id, targetTask.columnId, Math.max(0, targetIndex));
+    setOpenPriorityTaskId(null);
   }
 
   function handleDragCancel(_event: DragCancelEvent) {
     armClickSuppression();
+    setOpenPriorityTaskId(null);
   }
 
   return (
@@ -346,13 +435,20 @@ export function KanbanBoard({
             <BoardColumnCard
               key={column.id}
               column={column}
-              tasks={tasks.filter((task) => task.columnId === column.id)}
+              tasks={sortTasksByPriority(tasks.filter((task) => task.columnId === column.id))}
               selectedTaskId={selectedTaskId}
               projectNamesById={projectNamesById}
+              dragEnabled={dragEnabled}
               canCreateTask={canCreateTask}
               onSelectTask={onSelectTask}
               shouldSuppressClick={shouldSuppressClick}
               onCreateTask={onCreateTask}
+              onSetTaskPriority={onSetTaskPriority}
+              openPriorityTaskId={openPriorityTaskId}
+              onTogglePriorityMenu={(taskId) =>
+                setOpenPriorityTaskId((current) => (current === taskId ? null : taskId))
+              }
+              onClosePriorityMenu={() => setOpenPriorityTaskId(null)}
               onAdvanceTask={onAdvanceTask}
               onOpenArchive={onOpenArchive}
             />

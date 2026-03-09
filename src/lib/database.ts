@@ -2,11 +2,21 @@ import Database from "@tauri-apps/plugin-sql";
 import type {
   BoardColumn,
   ChecklistItem,
+  MeasurementEntry,
   NewColumnInput,
   NewProjectInput,
   NewTaskInput,
   Project,
+  ReadingItem,
+  SubscriptionItem,
+  TrackerHabitKey,
+  TrackerHabitPreference,
+  TrackerEntry,
   Task,
+  UpsertReadingInput,
+  UpsertSubscriptionInput,
+  UpsertMeasurementEntryInput,
+  UpsertTrackerEntryInput,
   UpdateColumnInput,
   UpdateProjectInput,
   UpdateTaskInput,
@@ -25,6 +35,28 @@ const PROJECT_ACCENTS = ["#80614d", "#6d7d63", "#a1644c", "#6c5f86"];
 const PROJECT_ICONS = ["💼", "📚", "🏠", "🧠", "💻", "🗂️", "🎯", "✍️"];
 const DEFAULT_COLUMN_COLOR = "#5450ff";
 export const ARCHIVED_COLUMN_NAME = "Archiviato";
+const DEFAULT_TRACKER_WORKOUT_ACTIVITIES = [
+  "Camminata",
+  "Corsa",
+  "Palestra",
+  "Bici",
+  "Yoga",
+  "Nuoto",
+  "Mobilita",
+  "Altro",
+];
+const DEFAULT_TRACKER_HABIT_PREFERENCES: Array<{
+  key: TrackerHabitKey;
+  label: string;
+  color: string;
+}> = [
+  { key: "readBook", label: "Lettura", color: "#4784ff" },
+  { key: "skincare", label: "Skincare", color: "#ae5dff" },
+  { key: "meditation", label: "Meditazione", color: "#00b69e" },
+  { key: "creatine", label: "Creatina", color: "#4fd3c4" },
+  { key: "supplements", label: "Integratori", color: "#e9992a" },
+  { key: "avoidedReels", label: "No reel", color: "#e6546e" },
+];
 
 let databasePromise: Promise<Database> | null = null;
 
@@ -41,6 +73,104 @@ type PositionedColumnRow = {
   position: number;
 };
 type TableInfoRow = { name: string };
+type TrackerEntryRow = {
+  date: string;
+  weightKg: number | null;
+  didWorkout: number;
+  workoutType: string | null;
+  workoutMinutes: number | null;
+  stepsOver8000: number;
+  readBook: number;
+  skincare: number;
+  meditation: number;
+  creatine: number;
+  supplements: number;
+  avoidedReels: number;
+  kcalTotal: number | null;
+  proteinG: number | null;
+  carbsG: number | null;
+  sugarsG: number | null;
+  fatsG: number | null;
+  notes: string;
+  updatedAt: string;
+};
+type TrackerWorkoutActivityRow = {
+  id: string;
+  name: string;
+  position: number;
+};
+type TrackerHabitPreferenceRow = {
+  habitKey: TrackerHabitKey;
+  label: string;
+  color: string;
+  hidden: number;
+  position: number;
+};
+type MeasurementEntryRow = {
+  date: string;
+  bicepLeft: number | null;
+  bicepRight: number | null;
+  forearmLeft: number | null;
+  forearmRight: number | null;
+  chest: number | null;
+  waist: number | null;
+  hips: number | null;
+  quadricepsLeft: number | null;
+  quadricepsRight: number | null;
+  calfLeft: number | null;
+  calfRight: number | null;
+  updatedAt: string;
+};
+type SubscriptionItemRow = {
+  id: string;
+  status: string;
+  name: string;
+  totalPrice: number;
+  mySharePrice: number;
+  frequency: string;
+  platform: string;
+  billingSource: string;
+  renewalDate: string;
+  category: string;
+  sharing: string;
+  sharedPeople: string;
+  createdAt: string;
+  updatedAt: string;
+};
+type ReadingItemRow = {
+  id: string;
+  status: string;
+  title: string;
+  readingYear: number | null;
+  rating: string | null;
+  category: string;
+  summary: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+async function ensureTrackerHabitPreferencesSeeded(db: Database) {
+  for (const [position, habit] of DEFAULT_TRACKER_HABIT_PREFERENCES.entries()) {
+    await db.execute(
+      `INSERT OR IGNORE INTO tracker_habit_preferences (
+        habit_key,
+        label,
+        color,
+        hidden,
+        position
+      ) VALUES ($1, $2, $3, 0, $4)`,
+      [habit.key, habit.label, habit.color, position],
+    );
+
+    await db.execute(
+      `UPDATE tracker_habit_preferences
+       SET label = $1,
+           position = $2
+       WHERE habit_key = $3`,
+      [habit.label, position, habit.key],
+    );
+  }
+}
 
 function getDatabase() {
   if (!databasePromise) {
@@ -269,8 +399,8 @@ async function seedWorkspace() {
     await db.execute(
       `INSERT INTO tasks (
         id, project_id, column_id, title, notes, effort, lane, position,
-        start_date, due_date, created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        start_date, due_date, timeline_color, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [
         crypto.randomUUID(),
         task.projectId,
@@ -282,6 +412,7 @@ async function seedWorkspace() {
         task.position,
         task.startDate,
         task.dueDate,
+        null,
         now,
       ],
     );
@@ -317,6 +448,7 @@ export async function loadWorkspace(): Promise<WorkspaceSnapshot> {
           position,
           start_date AS startDate,
           due_date AS dueDate,
+          timeline_color AS timelineColor,
           created_at AS createdAt
        FROM tasks
        ORDER BY project_id, column_id, position`,
@@ -385,8 +517,8 @@ export async function createTask(input: NewTaskInput) {
   await db.execute(
     `INSERT INTO tasks (
       id, project_id, column_id, title, notes, effort, lane, position,
-      start_date, due_date, created_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      start_date, due_date, timeline_color, created_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
     [
       crypto.randomUUID(),
       input.projectId,
@@ -398,6 +530,7 @@ export async function createTask(input: NewTaskInput) {
       nextRows[0]?.nextPosition ?? 0,
       input.startDate,
       input.dueDate,
+      input.timelineColor?.trim() || null,
       isoNow(),
     ],
   );
@@ -426,16 +559,576 @@ export async function updateTask(input: UpdateTaskInput) {
          notes = $2,
          effort = $3,
          start_date = $4,
-         due_date = $5
-     WHERE id = $6`,
+         due_date = $5,
+         timeline_color = $6
+     WHERE id = $7`,
     [
       input.title.trim(),
       input.notes.trim(),
       input.effort.trim() || "Nessuna",
       input.startDate,
       input.dueDate,
+      input.timelineColor?.trim() || null,
       input.taskId,
     ],
+  );
+}
+
+export async function updateTaskPriority(taskId: string, effort: string) {
+  const db = await getDatabase();
+  await ensureSchema(db);
+
+  await db.execute(
+    `UPDATE tasks
+     SET effort = $1
+     WHERE id = $2`,
+    [effort.trim() || "Nessuna", taskId],
+  );
+}
+
+export async function loadTrackerEntries(year: number, month: number | null) {
+  const db = await getDatabase();
+  await ensureSchema(db);
+  const isWholeYear = month === null || month < 1 || month > 12;
+  const fromDate = isWholeYear
+    ? `${year}-01-01`
+    : `${year}-${String(month).padStart(2, "0")}-01`;
+  const untilDate = isWholeYear
+    ? `${year}-12-31`
+    : `${year}-${String(month).padStart(2, "0")}-${String(new Date(year, month, 0).getDate()).padStart(2, "0")}`;
+  const rows = await db.select<TrackerEntryRow[]>(
+    `SELECT
+        date,
+        weight_kg AS weightKg,
+        did_workout AS didWorkout,
+        workout_type AS workoutType,
+        workout_minutes AS workoutMinutes,
+        steps_over_8000 AS stepsOver8000,
+        read_book AS readBook,
+        skincare,
+        meditation,
+        creatine,
+        supplements,
+        avoided_reels AS avoidedReels,
+        kcal_total AS kcalTotal,
+        protein_g AS proteinG,
+        carbs_g AS carbsG,
+        sugars_g AS sugarsG,
+        fats_g AS fatsG,
+        notes,
+        updated_at AS updatedAt
+     FROM tracker_entries
+     WHERE date BETWEEN $1 AND $2
+     ORDER BY date`,
+    [fromDate, untilDate],
+  );
+
+  return rows.map<TrackerEntry>((row) => ({
+    date: row.date,
+    weightKg: row.weightKg,
+    didWorkout: Boolean(row.didWorkout),
+    workoutType: row.workoutType,
+    workoutMinutes: row.workoutMinutes,
+    stepsOver8000: Boolean(row.stepsOver8000),
+    readBook: Boolean(row.readBook),
+    skincare: Boolean(row.skincare),
+    meditation: Boolean(row.meditation),
+    creatine: Boolean(row.creatine),
+    supplements: Boolean(row.supplements),
+    avoidedReels: Boolean(row.avoidedReels),
+    kcalTotal: row.kcalTotal,
+    proteinG: row.proteinG,
+    carbsG: row.carbsG,
+    sugarsG: row.sugarsG,
+    fatsG: row.fatsG,
+    notes: row.notes,
+    updatedAt: row.updatedAt,
+  }));
+}
+
+export async function upsertTrackerEntry(input: UpsertTrackerEntryInput) {
+  const db = await getDatabase();
+  await ensureSchema(db);
+
+  await db.execute(
+    `INSERT INTO tracker_entries (
+      date,
+      weight_kg,
+      did_workout,
+      workout_type,
+      workout_minutes,
+      steps_over_8000,
+      read_book,
+      skincare,
+      meditation,
+      creatine,
+      supplements,
+      avoided_reels,
+      kcal_total,
+      protein_g,
+      carbs_g,
+      sugars_g,
+      fats_g,
+      notes,
+      updated_at
+    ) VALUES (
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+    )
+    ON CONFLICT(date) DO UPDATE SET
+      weight_kg = excluded.weight_kg,
+      did_workout = excluded.did_workout,
+      workout_type = excluded.workout_type,
+      workout_minutes = excluded.workout_minutes,
+      steps_over_8000 = excluded.steps_over_8000,
+      read_book = excluded.read_book,
+      skincare = excluded.skincare,
+      meditation = excluded.meditation,
+      creatine = excluded.creatine,
+      supplements = excluded.supplements,
+      avoided_reels = excluded.avoided_reels,
+      kcal_total = excluded.kcal_total,
+      protein_g = excluded.protein_g,
+      carbs_g = excluded.carbs_g,
+      sugars_g = excluded.sugars_g,
+      fats_g = excluded.fats_g,
+      notes = excluded.notes,
+      updated_at = excluded.updated_at`,
+    [
+      input.date,
+      input.weightKg,
+      input.didWorkout ? 1 : 0,
+      input.workoutType?.trim() || null,
+      input.workoutMinutes,
+      input.stepsOver8000 ? 1 : 0,
+      input.readBook ? 1 : 0,
+      input.skincare ? 1 : 0,
+      input.meditation ? 1 : 0,
+      input.creatine ? 1 : 0,
+      input.supplements ? 1 : 0,
+      input.avoidedReels ? 1 : 0,
+      input.kcalTotal,
+      input.proteinG,
+      input.carbsG,
+      input.sugarsG,
+      input.fatsG,
+      input.notes.trim(),
+      isoNow(),
+    ],
+  );
+}
+
+export async function loadTrackerWorkoutActivities() {
+  const db = await getDatabase();
+  await ensureSchema(db);
+  const rows = await db.select<TrackerWorkoutActivityRow[]>(
+    `SELECT id, name, position
+     FROM tracker_workout_activities
+     ORDER BY position, created_at`,
+  );
+
+  return rows.map((row) => row.name);
+}
+
+export async function createTrackerWorkoutActivity(name: string) {
+  const db = await getDatabase();
+  await ensureSchema(db);
+  const trimmedName = name.trim();
+
+  if (!trimmedName) {
+    return;
+  }
+
+  await db.execute(
+    `INSERT OR IGNORE INTO tracker_workout_activities (id, name, position, created_at)
+     VALUES (
+       $1,
+       $2,
+       (SELECT COALESCE(MAX(position), -1) + 1 FROM tracker_workout_activities),
+       $3
+     )`,
+    [crypto.randomUUID(), trimmedName, isoNow()],
+  );
+}
+
+export async function deleteTrackerWorkoutActivity(name: string) {
+  const db = await getDatabase();
+  await ensureSchema(db);
+  const trimmedName = name.trim();
+
+  if (!trimmedName) {
+    return;
+  }
+
+  await db.execute(
+    `DELETE FROM tracker_workout_activities
+     WHERE name = $1`,
+    [trimmedName],
+  );
+
+  const rows = await db.select<IdRow[]>(
+    `SELECT id
+     FROM tracker_workout_activities
+     ORDER BY position, created_at`,
+  );
+
+  for (const [position, row] of rows.entries()) {
+    await db.execute(
+      `UPDATE tracker_workout_activities
+       SET position = $1
+       WHERE id = $2`,
+      [position, row.id],
+    );
+  }
+}
+
+export async function loadTrackerHabitPreferences() {
+  const db = await getDatabase();
+  await ensureSchema(db);
+  await ensureTrackerHabitPreferencesSeeded(db);
+  const rows = await db.select<TrackerHabitPreferenceRow[]>(
+    `SELECT
+        habit_key AS habitKey,
+        label,
+        color,
+        hidden,
+        position
+     FROM tracker_habit_preferences
+     ORDER BY position`,
+  );
+
+  return rows.map<TrackerHabitPreference>((row) => ({
+    key: row.habitKey,
+    label: row.label,
+    color: row.color,
+    hidden: Boolean(row.hidden),
+    position: row.position,
+  }));
+}
+
+export async function updateTrackerHabitPreference(input: {
+  habitKey: TrackerHabitKey;
+  color: string;
+  hidden: boolean;
+}) {
+  const db = await getDatabase();
+  await ensureSchema(db);
+
+  await db.execute(
+    `UPDATE tracker_habit_preferences
+     SET color = $1,
+         hidden = $2
+     WHERE habit_key = $3`,
+    [input.color.trim() || "#5f72ff", input.hidden ? 1 : 0, input.habitKey],
+  );
+}
+
+export async function loadMeasurementEntries() {
+  const db = await getDatabase();
+  await ensureSchema(db);
+  const rows = await db.select<MeasurementEntryRow[]>(
+    `SELECT
+        date,
+        bicep_left AS bicepLeft,
+        bicep_right AS bicepRight,
+        forearm_left AS forearmLeft,
+        forearm_right AS forearmRight,
+        chest,
+        waist,
+        hips,
+        quadriceps_left AS quadricepsLeft,
+        quadriceps_right AS quadricepsRight,
+        calf_left AS calfLeft,
+        calf_right AS calfRight,
+        updated_at AS updatedAt
+     FROM measurement_entries
+     ORDER BY date DESC`,
+  );
+
+  return rows.map<MeasurementEntry>((row) => ({
+    date: row.date,
+    bicepLeft: row.bicepLeft,
+    bicepRight: row.bicepRight,
+    forearmLeft: row.forearmLeft,
+    forearmRight: row.forearmRight,
+    chest: row.chest,
+    waist: row.waist,
+    hips: row.hips,
+    quadricepsLeft: row.quadricepsLeft,
+    quadricepsRight: row.quadricepsRight,
+    calfLeft: row.calfLeft,
+    calfRight: row.calfRight,
+    updatedAt: row.updatedAt,
+  }));
+}
+
+export async function upsertMeasurementEntry(input: UpsertMeasurementEntryInput) {
+  const db = await getDatabase();
+  await ensureSchema(db);
+
+  await db.execute(
+    `INSERT INTO measurement_entries (
+      date,
+      bicep_left,
+      bicep_right,
+      forearm_left,
+      forearm_right,
+      chest,
+      waist,
+      hips,
+      quadriceps_left,
+      quadriceps_right,
+      calf_left,
+      calf_right,
+      updated_at
+    ) VALUES (
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+    )
+    ON CONFLICT(date) DO UPDATE SET
+      bicep_left = excluded.bicep_left,
+      bicep_right = excluded.bicep_right,
+      forearm_left = excluded.forearm_left,
+      forearm_right = excluded.forearm_right,
+      chest = excluded.chest,
+      waist = excluded.waist,
+      hips = excluded.hips,
+      quadriceps_left = excluded.quadriceps_left,
+      quadriceps_right = excluded.quadriceps_right,
+      calf_left = excluded.calf_left,
+      calf_right = excluded.calf_right,
+      updated_at = excluded.updated_at`,
+    [
+      input.date,
+      input.bicepLeft,
+      input.bicepRight,
+      input.forearmLeft,
+      input.forearmRight,
+      input.chest,
+      input.waist,
+      input.hips,
+      input.quadricepsLeft,
+      input.quadricepsRight,
+      input.calfLeft,
+      input.calfRight,
+      isoNow(),
+    ],
+  );
+}
+
+export async function deleteMeasurementEntry(date: string) {
+  const db = await getDatabase();
+  await ensureSchema(db);
+
+  await db.execute(
+    `DELETE FROM measurement_entries
+     WHERE date = $1`,
+    [date],
+  );
+}
+
+export async function loadSubscriptions() {
+  const db = await getDatabase();
+  await ensureSchema(db);
+  const rows = await db.select<SubscriptionItemRow[]>(
+    `SELECT
+        id,
+        status,
+        name,
+        total_price AS totalPrice,
+        my_share_price AS mySharePrice,
+        frequency,
+        platform,
+        billing_source AS billingSource,
+        renewal_date AS renewalDate,
+        category,
+        sharing,
+        shared_people AS sharedPeople,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+     FROM subscriptions
+     ORDER BY created_at DESC, name COLLATE NOCASE`,
+  );
+
+  return rows.map<SubscriptionItem>((row) => ({
+    id: row.id,
+    status: row.status as SubscriptionItem["status"],
+    name: row.name,
+    totalPrice: row.totalPrice,
+    mySharePrice: row.mySharePrice,
+    frequency: row.frequency as SubscriptionItem["frequency"],
+    platform: row.platform,
+    billingSource: row.billingSource,
+    renewalDate: row.renewalDate,
+    category: row.category as SubscriptionItem["category"],
+    sharing: row.sharing as SubscriptionItem["sharing"],
+    sharedPeople: (() => {
+      try {
+        const parsed = JSON.parse(row.sharedPeople || "[]");
+        return Array.isArray(parsed)
+          ? parsed.filter((person): person is string => typeof person === "string")
+          : [];
+      } catch (error) {
+        console.error(error);
+        return [];
+      }
+    })(),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }));
+}
+
+export async function upsertSubscription(input: UpsertSubscriptionInput) {
+  const db = await getDatabase();
+  await ensureSchema(db);
+  const id = input.id?.trim() || crypto.randomUUID();
+  const now = isoNow();
+
+  await db.execute(
+    `INSERT INTO subscriptions (
+      id,
+      status,
+      name,
+      total_price,
+      my_share_price,
+      frequency,
+      platform,
+      billing_source,
+      renewal_date,
+      category,
+      sharing,
+      shared_people,
+      created_at,
+      updated_at
+    ) VALUES (
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, COALESCE((SELECT created_at FROM subscriptions WHERE id = $1), $13), $14
+    )
+    ON CONFLICT(id) DO UPDATE SET
+      status = excluded.status,
+      name = excluded.name,
+      total_price = excluded.total_price,
+      my_share_price = excluded.my_share_price,
+      frequency = excluded.frequency,
+      platform = excluded.platform,
+      billing_source = excluded.billing_source,
+      renewal_date = excluded.renewal_date,
+      category = excluded.category,
+      sharing = excluded.sharing,
+      shared_people = excluded.shared_people,
+      updated_at = excluded.updated_at`,
+    [
+      id,
+      input.status,
+      input.name.trim(),
+      input.totalPrice,
+      input.mySharePrice,
+      input.frequency,
+      input.platform.trim(),
+      input.billingSource.trim(),
+      input.renewalDate,
+      input.category,
+      input.sharing,
+      JSON.stringify(input.sharedPeople),
+      now,
+      now,
+    ],
+  );
+
+  return id;
+}
+
+export async function deleteSubscription(id: string) {
+  const db = await getDatabase();
+  await ensureSchema(db);
+
+  await db.execute(
+    `DELETE FROM subscriptions
+     WHERE id = $1`,
+    [id],
+  );
+}
+
+export async function loadReadingItems() {
+  const db = await getDatabase();
+  await ensureSchema(db);
+  const rows = await db.select<ReadingItemRow[]>(
+    `SELECT
+        id,
+        status,
+        title,
+        reading_year AS readingYear,
+        rating,
+        category,
+        summary,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+     FROM reading_items
+     ORDER BY updated_at DESC, title COLLATE NOCASE`,
+  );
+
+  return rows.map<ReadingItem>((row) => ({
+    id: row.id,
+    status: row.status as ReadingItem["status"],
+    title: row.title,
+    readingYear: row.readingYear,
+    rating: row.rating as ReadingItem["rating"],
+    category: row.category as ReadingItem["category"],
+    summary: row.summary,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }));
+}
+
+export async function upsertReadingItem(input: UpsertReadingInput) {
+  const db = await getDatabase();
+  await ensureSchema(db);
+  const id = input.id?.trim() || crypto.randomUUID();
+  const now = isoNow();
+
+  await db.execute(
+    `INSERT INTO reading_items (
+      id,
+      status,
+      title,
+      reading_year,
+      rating,
+      category,
+      summary,
+      created_at,
+      updated_at
+    ) VALUES (
+      $1, $2, $3, $4, $5, $6, $7, COALESCE((SELECT created_at FROM reading_items WHERE id = $1), $8), $9
+    )
+    ON CONFLICT(id) DO UPDATE SET
+      status = excluded.status,
+      title = excluded.title,
+      reading_year = excluded.reading_year,
+      rating = excluded.rating,
+      category = excluded.category,
+      summary = excluded.summary,
+      updated_at = excluded.updated_at`,
+    [
+      id,
+      input.status,
+      input.title.trim(),
+      input.readingYear,
+      input.rating,
+      input.category,
+      input.summary.trim(),
+      now,
+      now,
+    ],
+  );
+
+  return id;
+}
+
+export async function deleteReadingItem(id: string) {
+  const db = await getDatabase();
+  await ensureSchema(db);
+
+  await db.execute(
+    `DELETE FROM reading_items
+     WHERE id = $1`,
+    [id],
   );
 }
 
@@ -803,6 +1496,44 @@ export async function toggleChecklistItem(itemId: string, completed: boolean) {
   );
 }
 
+export async function deleteChecklistItem(itemId: string) {
+  const db = await getDatabase();
+  await ensureSchema(db);
+  const [item] = await db.select<{ taskId: string }[]>(
+    `SELECT task_id AS taskId
+     FROM task_checklist_items
+     WHERE id = $1`,
+    [itemId],
+  );
+
+  if (!item) {
+    return;
+  }
+
+  await db.execute(
+    `DELETE FROM task_checklist_items
+     WHERE id = $1`,
+    [itemId],
+  );
+
+  const remainingItems = await db.select<IdRow[]>(
+    `SELECT id
+     FROM task_checklist_items
+     WHERE task_id = $1
+     ORDER BY position, created_at`,
+    [item.taskId],
+  );
+
+  for (const [position, checklistItem] of remainingItems.entries()) {
+    await db.execute(
+      `UPDATE task_checklist_items
+       SET position = $1
+       WHERE id = $2`,
+      [position, checklistItem.id],
+    );
+  }
+}
+
 export async function updateProjectIcon(projectId: string, icon: string) {
   const db = await getDatabase();
   await ensureSchema(db);
@@ -815,7 +1546,63 @@ export async function updateProjectIcon(projectId: string, icon: string) {
   );
 }
 
+export async function updateProjectAccent(projectId: string, accent: string) {
+  const db = await getDatabase();
+  await ensureSchema(db);
+
+  await db.execute(
+    `UPDATE projects
+     SET accent = $1
+     WHERE id = $2`,
+    [accent.trim() || PROJECT_ACCENTS[0], projectId],
+  );
+}
+
 async function ensureSchema(db: Database) {
+  await db.execute(
+    `CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      accent TEXT NOT NULL DEFAULT '#6d7d63',
+      icon TEXT NOT NULL DEFAULT '🗂️',
+      status TEXT NOT NULL DEFAULT 'active',
+      parent_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL
+    )`,
+  );
+
+  await db.execute(
+    `CREATE TABLE IF NOT EXISTS board_columns (
+      id TEXT PRIMARY KEY NOT NULL,
+      project_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      color TEXT NOT NULL DEFAULT '#5450ff',
+      icon TEXT NOT NULL DEFAULT 'circle-solid',
+      position INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    )`,
+  );
+
+  await db.execute(
+    `CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY NOT NULL,
+      project_id TEXT NOT NULL,
+      column_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      notes TEXT NOT NULL DEFAULT '',
+      effort TEXT NOT NULL DEFAULT 'Nessuna',
+      lane TEXT NOT NULL DEFAULT 'general',
+      position INTEGER NOT NULL DEFAULT 0,
+      start_date TEXT,
+      due_date TEXT,
+      timeline_color TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      FOREIGN KEY (column_id) REFERENCES board_columns(id) ON DELETE CASCADE
+    )`,
+  );
+
   const columnRows = await db.select<TableInfoRow[]>(
     "PRAGMA table_info(board_columns)",
   );
@@ -824,8 +1611,13 @@ async function ensureSchema(db: Database) {
   const projectRows = await db.select<TableInfoRow[]>(
     "PRAGMA table_info(projects)",
   );
+  const taskRows = await db.select<TableInfoRow[]>(
+    "PRAGMA table_info(tasks)",
+  );
+  const hasAccent = projectRows.some((column) => column.name === "accent");
   const hasIcon = projectRows.some((column) => column.name === "icon");
   const hasParentProject = projectRows.some((column) => column.name === "parent_project_id");
+  const hasTaskTimelineColor = taskRows.some((column) => column.name === "timeline_color");
 
   if (!hasColor) {
     await db.execute(
@@ -884,9 +1676,22 @@ async function ensureSchema(db: Database) {
     }
   }
 
+  if (!hasAccent) {
+    await db.execute(
+      `ALTER TABLE projects
+       ADD COLUMN accent TEXT NOT NULL DEFAULT '#6d7d63'`,
+    );
+  }
+
   if (!hasParentProject) {
     await db.execute(
       "ALTER TABLE projects ADD COLUMN parent_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL",
+    );
+  }
+
+  if (!hasTaskTimelineColor) {
+    await db.execute(
+      "ALTER TABLE tasks ADD COLUMN timeline_color TEXT DEFAULT NULL",
     );
   }
 
@@ -910,6 +1715,126 @@ async function ensureSchema(db: Database) {
   await db.execute(
     `CREATE INDEX IF NOT EXISTS idx_checklist_task
      ON task_checklist_items(task_id, position)`,
+  );
+
+  await db.execute(
+    `CREATE TABLE IF NOT EXISTS tracker_entries (
+      date TEXT PRIMARY KEY NOT NULL,
+      weight_kg REAL,
+      did_workout INTEGER NOT NULL DEFAULT 0,
+      workout_type TEXT,
+      workout_minutes INTEGER,
+      steps_over_8000 INTEGER NOT NULL DEFAULT 0,
+      read_book INTEGER NOT NULL DEFAULT 0,
+      skincare INTEGER NOT NULL DEFAULT 0,
+      meditation INTEGER NOT NULL DEFAULT 0,
+      creatine INTEGER NOT NULL DEFAULT 0,
+      supplements INTEGER NOT NULL DEFAULT 0,
+      avoided_reels INTEGER NOT NULL DEFAULT 0,
+      kcal_total INTEGER,
+      protein_g REAL,
+      carbs_g REAL,
+      sugars_g REAL,
+      fats_g REAL,
+      notes TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL
+    )`,
+  );
+
+  const trackerEntryRows = await db.select<TableInfoRow[]>(
+    "PRAGMA table_info(tracker_entries)",
+  );
+  const trackerHasCreatine = trackerEntryRows.some((column) => column.name === "creatine");
+
+  if (!trackerHasCreatine) {
+    await db.execute(
+      "ALTER TABLE tracker_entries ADD COLUMN creatine INTEGER NOT NULL DEFAULT 0",
+    );
+  }
+
+  await db.execute(
+    `CREATE TABLE IF NOT EXISTS measurement_entries (
+      date TEXT PRIMARY KEY NOT NULL,
+      bicep_left REAL,
+      bicep_right REAL,
+      forearm_left REAL,
+      forearm_right REAL,
+      chest REAL,
+      waist REAL,
+      hips REAL,
+      quadriceps_left REAL,
+      quadriceps_right REAL,
+      calf_left REAL,
+      calf_right REAL,
+      updated_at TEXT NOT NULL
+    )`,
+  );
+
+  await db.execute(
+    `CREATE TABLE IF NOT EXISTS tracker_workout_activities (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+      position INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    )`,
+  );
+
+  const trackerWorkoutActivityCount = await db.select<CountRow[]>(
+    "SELECT COUNT(*) AS total FROM tracker_workout_activities",
+  );
+
+  if (!trackerWorkoutActivityCount[0]?.total) {
+    for (const [position, activity] of DEFAULT_TRACKER_WORKOUT_ACTIVITIES.entries()) {
+      await db.execute(
+        `INSERT INTO tracker_workout_activities (id, name, position, created_at)
+         VALUES ($1, $2, $3, $4)`,
+        [crypto.randomUUID(), activity, position, isoNow()],
+      );
+    }
+  }
+
+  await db.execute(
+    `CREATE TABLE IF NOT EXISTS tracker_habit_preferences (
+      habit_key TEXT PRIMARY KEY NOT NULL,
+      label TEXT NOT NULL,
+      color TEXT NOT NULL DEFAULT '#5f72ff',
+      hidden INTEGER NOT NULL DEFAULT 0,
+      position INTEGER NOT NULL
+    )`,
+  );
+  await ensureTrackerHabitPreferencesSeeded(db);
+
+  await db.execute(
+    `CREATE TABLE IF NOT EXISTS subscriptions (
+      id TEXT PRIMARY KEY NOT NULL,
+      status TEXT NOT NULL,
+      name TEXT NOT NULL,
+      total_price REAL NOT NULL,
+      my_share_price REAL NOT NULL,
+      frequency TEXT NOT NULL,
+      platform TEXT NOT NULL DEFAULT '',
+      billing_source TEXT NOT NULL DEFAULT '',
+      renewal_date TEXT NOT NULL,
+      category TEXT NOT NULL,
+      sharing TEXT NOT NULL DEFAULT 'individuale',
+      shared_people TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+  );
+
+  await db.execute(
+    `CREATE TABLE IF NOT EXISTS reading_items (
+      id TEXT PRIMARY KEY NOT NULL,
+      status TEXT NOT NULL,
+      title TEXT NOT NULL,
+      reading_year INTEGER,
+      rating TEXT,
+      category TEXT NOT NULL,
+      summary TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
   );
 }
 
